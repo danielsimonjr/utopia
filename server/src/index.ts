@@ -22,7 +22,8 @@ import { processDocument } from "./pipeline";
 import { extractDocument } from "./extraction";
 import { syncSource } from "./ingest_sources";
 import { adjudicateEntities } from "./adjudication";
-import { runBootstrap } from "./bootstrap_ontology";
+import { refresh as refreshOntologyIndex } from "./ontology_index";
+import { bootstrapOntology } from "./bootstrap_ontology";
 
 // Bun loads `.env` (and `.env.local`) automatically for `bun run`/`bun
 // <file>`, matching `dotenvy::dotenv().ok()` on the Rust side — no extra
@@ -76,15 +77,26 @@ async function dispatch(state: AppState, job: Job): Promise<void> {
       return;
 
     case "extract_document":
-      // Graph extraction (LLM entity/relation extraction) is not wired up
-      // in this build yet — mirrors `crates/utopia-server/src/extraction.rs`,
-      // out of scope here. Logging and succeeding keeps documents usable
-      // for search/chat instead of stuck in "queued" forever.
-      log.warn("extract not wired", { job_id: job.id, document_id: payloadDocumentId(job.payload) });
+      await extractDocument(state, payloadDocumentId(job.payload));
       return;
 
     case "sync_source":
-      log.warn("sync_source not wired", { job_id: job.id, source_id: payloadSourceId(job.payload) });
+      await syncSource(state, payloadSourceId(job.payload));
+      return;
+
+    case "adjudicate_entities":
+      await adjudicateEntities(state, payloadKbId(job.payload));
+      return;
+
+    case "bootstrap_ontology":
+      await bootstrapOntology(state, payloadKbId(job.payload));
+      return;
+
+    // Ontology vector index: built in the background, never on the
+    // request path — embedding a fresh, large ontology takes minutes,
+    // and nothing interactive should wait on it.
+    case "embed_ontology":
+      await refreshOntologyIndex(state, payloadKbId(job.payload));
       return;
 
     // Scheduled re-derivation (materialize_inferences is fully implemented
