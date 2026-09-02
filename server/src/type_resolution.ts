@@ -378,7 +378,7 @@ export async function resolve(state: AppState, kb_id: Uuid): Promise<ResolutionO
   // review again. Crossing an axis is about the two classes, and an
   // entity only happens to be the one that raised it — the second city
   // should not be asked again.
-  const approved = await store.resolution.approved_refinements(sql, kb_id);
+  const approved = await store.resolution.approved_refinements(state.sql, kb_id);
 
   const picks: [Uuid, Uuid][] = [];
   const forReview: ReviewItem[] = [];
@@ -481,7 +481,7 @@ export async function resolve(state: AppState, kb_id: Uuid): Promise<ResolutionO
   let batch: Uuid | null = null;
   let retyped = 0;
   if (picks.length > 0) {
-    const [b, n] = await store.resolution.retype_entities(sql, kb_id, picks, null);
+    const [b, n] = await store.resolution.retype_entities(state.sql, kb_id, picks, null);
     batch = b;
     retyped = n;
   }

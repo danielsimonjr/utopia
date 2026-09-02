@@ -10,6 +10,7 @@ import type { Sql } from "./core/db";
 import type { BlobStore } from "./blob";
 import type { SearchIndex } from "./search";
 import type { Uuid } from "./core/ids";
+import { Registry as LiveRegistry } from "./live";
 
 /** In-process event (SSE push to the frontend for a local refetch). */
 export type AppEventKind = "document" | "review" | "graph" | "source" | "alert";
@@ -68,6 +69,8 @@ export class AppState {
   readonly dataDir: string;
   /** Read fresh by the job scheduling loop every round; changing it takes effect right away. */
   readonly workerConcurrency: { value: number };
+  /** Answers currently being generated, looked up by conversation. Survives a page reload (see `live.ts`). */
+  readonly live: LiveRegistry;
 
   private readonly bus = new EventBus();
 
@@ -80,6 +83,7 @@ export class AppState {
     this.cookieSecure = opts.cookieSecure;
     this.dataDir = opts.dataDir;
     this.workerConcurrency = { value: opts.workerConcurrency };
+    this.live = new LiveRegistry();
   }
 
   subscribeEvents(fn: (e: AppEvent) => void): Unsubscribe {

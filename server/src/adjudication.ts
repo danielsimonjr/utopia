@@ -11,13 +11,12 @@
  */
 
 import { createHash } from "node:crypto";
-import type { Sql } from "./core/db";
+import type { AppState } from "./state";
 import * as store from "./store";
 import { chatClient, acquireChat } from "./llm_util";
 import { isAppError } from "./core/errors";
 import type { Uuid } from "./core/ids";
 import { buildAdjudicationMessages, parseAdjudication, type AdjudicationPair } from "./extract";
-import * as events from "./events";
 import type { ReviewItem, ReviewSide } from "./store/resolution";
 
 const BATCH_SIZE = 12;
@@ -32,34 +31,34 @@ function pairKey(item: ReviewItem): string {
   return createHash("sha256").update(sides.join("##")).digest("hex");
 }
 
-export async function adjudicateEntities(sql: Sql, kb_id: Uuid): Promise<void> {
-  const kb = await store.kbs.get(sql, kb_id);
-  const settings = await store.settings.get(sql, kb.workspace_id);
+export async function adjudicateEntities(state: AppState, kb_id: Uuid): Promise<void> {
+  const kb = await store.kbs.get(state.sql, kb_id);
+  const settings = await store.settings.get(state.sql, kb.workspace_id);
   const client = settings ? chatClient(settings) : null;
   const model = settings?.chat_model ?? "";
 
   if (!client) {
     // No model available: escalate everything to manual review; the task itself finishes successfully.
-    const items = await store.resolution.pending_adjudications(sql, kb_id, 500);
+    const items = await store.resolution.pending_adjudications(state.sql, kb_id, 500);
     for (const item of items) {
-      await store.resolution.escalate_review(sql, item.id, "escalate_no_model");
+      await store.resolution.escalate_review(state.sql, item.id, "escalate_no_model");
     }
-    events.emitReview(kb_id);
+    state.emitReview(kb_id);
     return;
   }
 
   for (let round = 0; round < MAX_ROUNDS; round++) {
-    const items = await store.resolution.pending_adjudications(sql, kb_id, BATCH_SIZE);
+    const items = await store.resolution.pending_adjudications(state.sql, kb_id, BATCH_SIZE);
     if (items.length === 0) break;
 
     // First tier: the verdict cache.
     const toAsk: [ReviewItem, string][] = [];
     for (const item of items) {
       const key = pairKey(item);
-      const cached = await store.resolution.get_verdict(sql, kb_id, key);
+      const cached = await store.resolution.get_verdict(state.sql, kb_id, key);
       if (cached) {
         const [same, conf] = cached;
-        await applyVerdict(sql, kb_id, item, same, conf, "cached");
+        await applyVerdict(state, kb_id, item, same, conf, "cached");
       } else {
         toAsk.push([item, key]);
       }
@@ -83,7 +82,7 @@ export async function adjudicateEntities(sql: Sql, kb_id: Uuid): Promise<void> {
     // A failed call or a failed parse -> the task retries with backoff;
     // once retries run out the rows stay in the queue, and a human can
     // still decide them.
-    const release = settings ? await acquireChat(sql, settings) : () => {};
+    const release = settings ? await acquireChat(state, settings) : () => {};
     let reply: string;
     try {
       reply = await client.chat(messages);
@@ -99,25 +98,26 @@ export async function adjudicateEntities(sql: Sql, kb_id: Uuid): Promise<void> {
       if (v) {
         const same = v.verdict === "same" ? true : v.verdict === "different" ? false : null;
         const conf = Math.min(Math.max(v.confidence ?? 0.5, 0), 1);
-        await store.resolution.put_verdict(sql, kb_id, key, same, conf, model);
-        await applyVerdict(sql, kb_id, item, same, conf, "adjudicated");
+        await store.resolution.put_verdict(state.sql, kb_id, key, same, conf, model);
+        await applyVerdict(state, kb_id, item, same, conf, "adjudicated");
       } else {
-        await store.resolution.escalate_review(sql, item.id, "escalate_no_verdict");
+        await store.resolution.escalate_review(state.sql, item.id, "escalate_no_verdict");
       }
     }
     // This round's verdicts are written; tell the frontend to refresh the review queue.
-    events.emitReview(kb_id);
+    state.emitReview(kb_id);
   }
 }
 
 async function applyVerdict(
-  sql: Sql,
+  state: AppState,
   kb_id: Uuid,
   item: ReviewItem,
   same: boolean | null,
   conf: number,
   via: string,
 ): Promise<void> {
+  const sql = state.sql;
   if (same === true && conf >= AUTO_CONF) {
     const [target, source] = await store.resolution.merge_direction(sql, item.left.id, item.right.id);
     const reason = `auto_merged|${via} ${conf.toFixed(2)}`;
@@ -125,13 +125,15 @@ async function applyVerdict(
       await store.resolution.merge_entities(sql, kb_id, source, target, null, reason);
       await store.resolution.close_review_auto(sql, item.id, "merged", reason);
       // Decision ledger: an AI auto-merge (empty actor = the system).
-      await store.audit.recordOpt(sql, kb_id, null, "review.merge", "review", item.id, {
-        left: item.left.name,
-        right: item.right.name,
-        score: item.score,
-        confidence: conf,
-        via,
-      }).catch(() => {});
+      await store.audit
+        .recordOpt(sql, kb_id, null, "review.merge", "review", item.id, {
+          left: item.left.name,
+          right: item.right.name,
+          score: item.score,
+          confidence: conf,
+          via,
+        })
+        .catch(() => {});
     } catch (e) {
       // A chained merge earlier in the same batch may already have
       // swallowed one side: escalate to a human instead of failing the
@@ -145,13 +147,15 @@ async function applyVerdict(
   } else if (same === false && conf >= AUTO_CONF) {
     const reason = `kept_apart|${via} ${conf.toFixed(2)}`;
     await store.resolution.close_review_auto(sql, item.id, "kept", reason);
-    await store.audit.recordOpt(sql, kb_id, null, "review.keep", "review", item.id, {
-      left: item.left.name,
-      right: item.right.name,
-      score: item.score,
-      confidence: conf,
-      via,
-    }).catch(() => {});
+    await store.audit
+      .recordOpt(sql, kb_id, null, "review.keep", "review", item.id, {
+        left: item.left.name,
+        right: item.right.name,
+        score: item.score,
+        confidence: conf,
+        via,
+      })
+      .catch(() => {});
   } else {
     await store.resolution.escalate_review(sql, item.id, `escalate_unsure|${via} ${conf.toFixed(2)}`);
   }
