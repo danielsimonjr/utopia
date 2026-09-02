@@ -3,7 +3,7 @@
  * concurrency gate.
  */
 
-import type { Sql } from "./core/db";
+import type { AppState } from "./state";
 import { LlmClient } from "./llm";
 import * as store from "./store";
 import { chatReady, embedReady, type LlmSettings } from "./core/models";
@@ -80,9 +80,9 @@ const modelGates = new ModelGates();
  * is a safeguard, and it must not stall the whole pipeline just because
  * its own configuration could not be read.
  */
-export async function acquire(sql: Sql, baseUrl: string, model: string): Promise<() => void> {
+export async function acquire(state: AppState, baseUrl: string, model: string): Promise<() => void> {
   try {
-    const limit = await store.modelLimits.limitFor(sql, baseUrl, model);
+    const limit = await store.modelLimits.limitFor(state.sql, baseUrl, model);
     const key = `${baseUrl}|${model}`;
     return await modelGates.gate(key, limit).acquire();
   } catch {
@@ -90,12 +90,12 @@ export async function acquire(sql: Sql, baseUrl: string, model: string): Promise
   }
 }
 
-export async function acquireChat(sql: Sql, s: LlmSettings): Promise<() => void> {
+export async function acquireChat(state: AppState, s: LlmSettings): Promise<() => void> {
   if (!s.chat_base_url || !s.chat_model) return () => {};
-  return acquire(sql, s.chat_base_url, s.chat_model);
+  return acquire(state, s.chat_base_url, s.chat_model);
 }
 
-export async function acquireEmbed(sql: Sql, s: LlmSettings): Promise<() => void> {
+export async function acquireEmbed(state: AppState, s: LlmSettings): Promise<() => void> {
   if (!s.embed_base_url || !s.embed_model) return () => {};
-  return acquire(sql, s.embed_base_url, s.embed_model);
+  return acquire(state, s.embed_base_url, s.embed_model);
 }

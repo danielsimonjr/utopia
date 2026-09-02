@@ -62,7 +62,7 @@
  * adjudication, which can see both the description and the coarse type.
  */
 
-import type { Sql } from "./core/db";
+import type { AppState } from "./state";
 import * as store from "./store";
 import { chatClient } from "./llm_util";
 import { AppError } from "./core/errors";
@@ -144,12 +144,12 @@ export interface NeighbourVote {
  * adjudication, first answer "can retrieval even find anything". If it
  * cannot, no amount of good adjudication helps.
  */
-export async function preview(sql: Sql, kb_id: Uuid): Promise<TypeSuggestion[]> {
+export async function preview(state: AppState, kb_id: Uuid): Promise<TypeSuggestion[]> {
   // Only tops up the class half: this step never touches relations, and a
   // large ontology can have well over a thousand of those.
-  await ontologyIndex.refreshScoped(sql, kb_id, TypeKind.Entity);
+  await ontologyIndex.refreshScoped(state, kb_id, TypeKind.Entity);
 
-  const subjects = await store.resolution.entities_for_type_resolution(sql, kb_id, BATCH);
+  const subjects = await store.resolution.entities_for_type_resolution(state.sql, kb_id, BATCH);
   if (subjects.length === 0) return [];
 
   // **Two queries per entity, not one.**
@@ -174,9 +174,9 @@ export async function preview(sql: Sql, kb_id: Uuid): Promise<TypeSuggestion[]> 
   const nameQueries = names.filter((n): n is string => n !== null);
 
   const [profileHits, nameHits] = await Promise.all([
-    ontologyIndex.nearestForEach(sql, kb_id, profiles, CANDIDATES * 4, { kind: "class" }).catch(() => []),
+    ontologyIndex.nearestForEach(state, kb_id, profiles, CANDIDATES * 4, { kind: "class" }).catch(() => []),
     ontologyIndex
-      .nearestForEach(sql, kb_id, nameQueries, CANDIDATES * 4, { kind: "classLabel" })
+      .nearestForEach(state, kb_id, nameQueries, CANDIDATES * 4, { kind: "classLabel" })
       .catch(() => []),
   ]);
 
@@ -213,7 +213,7 @@ export async function preview(sql: Sql, kb_id: Uuid): Promise<TypeSuggestion[]> 
     // use (0009); every class is a candidate, and order is pure
     // retrieval order.
     const descendants = new Set<Uuid>(
-      s.coarse_id !== null ? await store.resolution.descendants_of(sql, kb_id, s.coarse_id) : [],
+      s.coarse_id !== null ? await store.resolution.descendants_of(state.sql, kb_id, s.coarse_id) : [],
     );
 
     // **The two paths alternate; they are not merged by distance.**
@@ -241,7 +241,7 @@ export async function preview(sql: Sql, kb_id: Uuid): Promise<TypeSuggestion[]> 
     const candidates = ranked.slice(0, CANDIDATES);
 
     // Second path: context-similar already-typed entities, voted by class.
-    const raw = await store.resolution.nearest_typed_entities(sql, kb_id, s.id, NEIGHBOURS);
+    const raw = await store.resolution.nearest_typed_entities(state.sql, kb_id, s.id, NEIGHBOURS);
     const votes = new Map<string, { votes: number; best_distance: number; examples: string[]; same_document_only: boolean }>();
     for (const [name, , key, distance, sameDoc] of raw) {
       const slot = votes.get(key) ?? { votes: 0, best_distance: distance, examples: [], same_document_only: true };
@@ -345,15 +345,15 @@ export interface ResolutionOutcome {
  * `ontology.types_resolved` audit entry, with the batch id, and can be
  * looked up there.
  */
-export async function resolve(sql: Sql, kb_id: Uuid): Promise<ResolutionOutcome> {
-  const all = await preview(sql, kb_id);
+export async function resolve(state: AppState, kb_id: Uuid): Promise<ResolutionOutcome> {
+  const all = await preview(state, kb_id);
   const items = all.filter((i) => i.candidates.length > 0 || i.neighbours.length > 0);
   if (items.length === 0) {
     return { batch: null, retyped: 0, for_review: [], left_alone: [] };
   }
 
-  const kb = await store.kbs.get(sql, kb_id);
-  const settings = await store.settings.get(sql, kb.workspace_id);
+  const kb = await store.kbs.get(state.sql, kb_id);
+  const settings = await store.settings.get(state.sql, kb.workspace_id);
   if (!settings) throw AppError.invalid("no_chat_model", "Chat model not configured");
   const client = chatClient(settings);
   if (!client) throw AppError.invalid("no_chat_model", "Chat model not configured");

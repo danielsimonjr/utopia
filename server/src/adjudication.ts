@@ -156,5 +156,3 @@ async function applyVerdict(
     await store.resolution.escalate_review(sql, item.id, `escalate_unsure|${via} ${conf.toFixed(2)}`);
   }
 }
-
-void AppError;

@@ -14,7 +14,7 @@
  * hook rots silently; comparing the source text does not.
  */
 
-import type { Sql } from "./core/db";
+import type { AppState } from "./state";
 import * as store from "./store";
 import { embedClient, acquireEmbed } from "./llm_util";
 import { log } from "./core/log";
@@ -55,31 +55,31 @@ async function mapWithConcurrency<T, R>(
 }
 
 /** Tops up this KB's stale ontology vectors. Returns 0 with no embed model configured — retrieval is an enhancement, and must not block a deployment that has none. */
-export async function refresh(sql: Sql, kb_id: Uuid): Promise<number> {
-  return refreshScoped(sql, kb_id, null);
+export async function refresh(state: AppState, kb_id: Uuid): Promise<number> {
+  return refreshScoped(state, kb_id, null);
 }
 
 /** Tops up only half. Type resolution only needs classes; waiting for relations to finish embedding too wastes time. The other half is caught by the background top-up job. */
 export async function refreshScoped(
-  sql: Sql,
+  state: AppState,
   kb_id: Uuid,
   only: store.ontology.TypeKind | null,
 ): Promise<number> {
   let kb;
   try {
-    kb = await store.kbs.get(sql, kb_id);
+    kb = await store.kbs.get(state.sql, kb_id);
   } catch {
     // The KB may already be gone -- the task was queued at import time,
     // minutes may have passed. That is not a failure, it is nothing to do.
     return 0;
   }
-  const settings = await store.settings.get(sql, kb.workspace_id);
+  const settings = await store.settings.get(state.sql, kb.workspace_id);
   if (!settings) return 0;
   const client = embedClient(settings);
   const model = settings.embed_model;
   if (!client || !model) return 0;
 
-  const stale = await store.ontology.types_needing_embedding(sql, kb_id, model, only);
+  const stale = await store.ontology.types_needing_embedding(state.sql, kb_id, model, only);
   if (stale.length === 0) return 0;
 
   let done = 0;
@@ -87,14 +87,14 @@ export async function refreshScoped(
   const batches = chunk(stale, BATCH);
   const results = await mapWithConcurrency(batches, EMBED_JOBS, async (batch) => {
     const texts = batch.map((t) => t.text);
-    const release = await acquireEmbed(sql, settings);
+    const release = await acquireEmbed(state, settings);
     try {
       const vectors = await client.embed(texts);
       if (vectors.length !== batch.length) {
         throw new Error(`embedding returned ${vectors.length} vectors for ${batch.length} rows`);
       }
       const items: [typeof batch[number], number[]][] = batch.map((t, i) => [t, vectors[i]!]);
-      await store.ontology.set_type_embeddings(sql, model, items);
+      await store.ontology.set_type_embeddings(state.sql, model, items);
       return batch.length;
     } finally {
       release();
@@ -134,7 +134,7 @@ export type Target =
  * once per vector — not once per wording.
  */
 export async function nearestForEach(
-  sql: Sql,
+  state: AppState,
   kb_id: Uuid,
   queries: string[],
   limit: number,
@@ -143,15 +143,15 @@ export async function nearestForEach(
   if (queries.length === 0) return [];
   const empty = (): TypeCandidate[][] => queries.map(() => []);
 
-  const kb = await store.kbs.get(sql, kb_id);
-  const settings = await store.settings.get(sql, kb.workspace_id);
+  const kb = await store.kbs.get(state.sql, kb_id);
+  const settings = await store.settings.get(state.sql, kb.workspace_id);
   if (!settings) return empty();
   const client = embedClient(settings);
   if (!client) return empty();
 
   const vectors: number[][] = [];
   for (const batch of chunk(queries, BATCH)) {
-    const release = await acquireEmbed(sql, settings);
+    const release = await acquireEmbed(state, settings);
     try {
       const got = await client.embed(batch);
       if (got.length !== batch.length) {
@@ -166,11 +166,11 @@ export async function nearestForEach(
   const out: TypeCandidate[][] = [];
   for (const v of vectors) {
     if (target.kind === "class") {
-      out.push(await store.ontology.nearest_entity_types(sql, kb_id, v, limit, false));
+      out.push(await store.ontology.nearest_entity_types(state.sql, kb_id, v, limit, false));
     } else if (target.kind === "classLabel") {
-      out.push(await store.ontology.nearest_entity_types(sql, kb_id, v, limit, true));
+      out.push(await store.ontology.nearest_entity_types(state.sql, kb_id, v, limit, true));
     } else {
-      out.push(await store.ontology.nearest_relation_types(sql, kb_id, v, limit, target.only));
+      out.push(await store.ontology.nearest_relation_types(state.sql, kb_id, v, limit, target.only));
     }
   }
   return out;
