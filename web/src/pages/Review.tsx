@@ -25,7 +25,8 @@ const CONFLICT_PAGE = 8;
 
 const ym = (iso: string | null) => (iso ? iso.slice(0, 7) : null);
 
-/** `code` 或 `code|detail`。查不到就原样显示——存量行里还是旧的英文散文 */
+/** The reason format is `code` or `code|detail`. When the code has no
+ *  label, this displays the raw text; older rows still hold the old prose text in English. */
 function escalationText(reason: string): string {
   const [code, detail] = reason.split("|");
   const worded = S.review.escalated[code];
@@ -191,7 +192,8 @@ function FactRow({
   );
 }
 
-/** 时态冲突行：旧事实 vs 新事实，三个动作（Close old / Keep both / Reject new）。 */
+/** A temporal conflict row: the old fact against the new fact, with
+ *  three actions available: close the old fact, keep both, or reject the new fact. */
 function ConflictRow({
   conflict,
   busy,
@@ -207,7 +209,7 @@ function ConflictRow({
   const [closeAt, setCloseAt] = useState("");
   const c = conflict;
   const needsDate = !c.new_valid_from;
-  // close_at 输入按天精度转 RFC3339
+  // Converts the day-precision `closeAt` input to RFC 3339.
   const closeAtIso = /^\d{4}-\d{2}-\d{2}$/.test(closeAt.trim())
     ? `${closeAt.trim()}T00:00:00Z`
     : undefined;
@@ -281,7 +283,8 @@ function ConflictRow({
   );
 }
 
-/** "文档新版没再提"的事实行：Reject（抽取错误）或 Close at date（这事结束了）。 */
+/** A fact row for "the newer document no longer mentions this". The
+ *  actions are Reject (the extraction was wrong) or Close at date (this fact ended). */
 function UnconfirmedRow({
   fact,
   busy,
@@ -401,7 +404,7 @@ function MergeRow({
   );
 }
 
-/* ---------- 决策台账行 ---------- */
+/* ---------- Decision log row ---------- */
 
 const DECISION_TONE: Record<string, ChipTone> = {
   "review.merge": "violet",
@@ -417,7 +420,8 @@ const DECISION_TONE: Record<string, ChipTone> = {
 };
 
 function DecisionRow({ e }: { e: ReviewHistoryEvent }) {
-  // detail 是决策时的自包含快照——不 join 活数据，事实删了台账也完整
+  // `detail` is a self-contained snapshot taken at decision time. It
+  // does not join against live data, so the log stays complete even after the fact is deleted.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const d = e.detail as any;
   let text: string;
@@ -455,12 +459,16 @@ function DecisionRow({ e }: { e: ReviewHistoryEvent }) {
   );
 }
 
-/** 一条待表态的数据映射口径（0011）。
+/** A pending data mapping decision (ADR 0011).
  *
- * 展示的重点是**「这个数怎么算」**——SQL / 表达式 / 表名按这个优先级取一个，
- * 因为人要判断的正是它对不对。概念名与源是身份，unit 是答里必须带的量纲。 */
-/** 本体自己的一处自相矛盾。**两个按钮而不是三个**——这一档压根没看数据，
- *  所以没有「数据错了」这条出路，只能是「我去改了本体」或「先放着」。 */
+ * The main display value is **"how to compute this number"**: SQL,
+ * expression, or table name, in that priority order, since a reviewer
+ * judges exactly that. The concept name and source identify the mapping,
+ * and `unit` is a dimension the answer must carry. */
+/** A self-contradiction inside the ontology itself. **This shows two
+ *  buttons, not three**, because this check never looks at the data.
+ *  So "the data is wrong" is not an outcome here; the choice is only
+ *  "I changed the ontology" or "leave this as is". */
 function DefectRow({
   defect: d,
   busy,
@@ -480,7 +488,7 @@ function DefectRow({
     inverse_not_mutual: S.review.defectInverseNotMutual,
     sub_property_cycle: S.review.defectSubPropertyCycle,
   }[d.kind];
-  // 后两类的后果值得写出来：不可满足的类不会报错，它只是永远空着
+  // The last two kinds have a consequence worth stating: an unsatisfiable type raises no error; it just stays permanently empty.
   const unsatisfiable =
     d.kind === "disjoint_with_ancestor" || d.kind === "inherits_disjoint";
   return (
@@ -524,9 +532,11 @@ function DefectRow({
   );
 }
 
-/** 一处公理违规。**三个按钮而不是两个**——第三个是这一档独有的出路：
- *  矛盾可能出在定义上（用户导的本体把某个属性声明成反对称，而他的语料里
- *  那关系其实双向），这时该改的是本体，不是二十条事实。 */
+/** One axiom violation. **This shows three buttons, not two.** The third
+ *  button is an outcome unique to this queue: the conflict can come from
+ *  the definition itself (a user's imported ontology declared a
+ *  relation asymmetric, but that relation is actually mutual in the
+ *  user's corpus). In that case, the fix belongs in the ontology, not in twenty individual facts. */
 function ViolationRow({
   violation: v,
   busy,
@@ -544,7 +554,7 @@ function ViolationRow({
     cycle: S.review.violationCycle,
     functional: S.review.violationFunctional,
   }[v.kind];
-  // 自反那一类两条事实是同一条——显示一遍就够，显示两遍像个 bug
+  // For a self-loop violation, the two facts are the same fact. Showing it once is correct; showing it twice would look like a bug.
   const single = v.left_fact === v.right_fact;
   return (
     <div className="glass rounded-xl p-3">
@@ -594,22 +604,24 @@ function ViolationRow({
   );
 }
 
-/* ---------- 页面：左栏分类 + 单类内容区 ---------- */
+/* ---------- Page layout: a left-side category rail plus a single content area ---------- */
 
 type Sel =
   | "duplicates"
   | "conflicts"
   | "unconfirmed"
   | "lowconf"
-  // 公理违规（0002 R0）。**与 conflicts 分开**：那一档问「哪条对」，
-  // 这一档还可能答「公理写错了」——出路不同
+  // Axiom violations (ADR 0002, R0). **This is separate from
+  // `conflicts`.** That queue asks "which fact is correct"; this queue
+  // can also answer "the axiom itself is wrong", a different outcome.
   | "violations"
-  // 本体自己的自相矛盾。**与 violations 分开**：那一档看事实，这一档只看定义
+  // Ontology self-contradictions. **This is separate from
+  // `violations`.** That queue examines facts; this queue examines only definitions.
   | "defects"
   | "decisions"
   | "merges";
 
-/** 走服务端分页的那几档（决策台账另有自己的接口） */
+/** The queues that page through the server (the decision log has its own separate endpoint). */
 const QUEUE_FETCHED: ReviewQueue[] = [
   "duplicates",
   "conflicts",
@@ -658,7 +670,7 @@ function RailItem({
   label: string;
   count: number | null;
   onClick: () => void;
-  /** 这一档不在本页办——加个去向记号，免得点下去以为页面没反应 */
+  /** This queue is not handled on this page. This mark shows the destination, so a click does not look like it did nothing. */
   external?: boolean;
 }) {
   return (
@@ -695,11 +707,15 @@ export function Review() {
   const [sel, setSel] = useState<Sel | null>(null);
   const [page, setPage] = useState(0);
 
-  // 队列变化经 SSE 事件流推送（useKbEvents 挂在 Shell），无需轮询。
+  // Queue changes arrive through the SSE event stream (useKbEvents,
+  // mounted in Shell), so no polling is needed here.
   //
-  // **按分档 + 页码取**：从前一次把八个队列全端回来、每档 100 条、客户端分页，
-  // 于是左栏的徽标是截断后的数字，第十一页之后的东西界面上不存在。现在计数
-  // 每次都回（服务端 COUNT，不受一页多少条影响），内容只回当前这一档的一页。
+  // **This fetches by queue and page number.** An earlier version
+  // fetched all eight queues at once, one hundred rows per queue, and
+  // paged them on the client. The left-rail badge then showed a
+  // truncated number, and anything past page ten did not exist in the
+  // UI. Now, the count always comes back as a server-side `COUNT`,
+  // independent of the page size, and the content returns only the current queue's page.
   const queueSel: ReviewQueue = QUEUE_FETCHED.includes(
     (sel ?? "duplicates") as ReviewQueue,
   )
@@ -715,10 +731,11 @@ export function Review() {
         page * PAGE_SIZE[queueSel as Sel],
       ),
     enabled: !!kb,
-    // 翻页时别把上一页闪成空白——计数与骨架都还在，只有条目在换
+    // This avoids a blank flash on the previous page while paging. The
+    // count and the layout stay in place; only the items change.
     placeholderData: (prev) => prev,
   });
-  // 决策台账：服务端分页，仅选中时拉取
+  // Decision log: paged by the server, fetched only when this tab is selected.
   const history = useQuery({
     queryKey: ["reviewHistory", kb?.id, page],
     queryFn: () => api.reviewHistory(kb!.id, page),
@@ -769,8 +786,10 @@ export function Review() {
     }) => api.decideViolation(kb!.id, id, resolution),
     onSettled: invalidate,
   });
-  // 检查是同步的纯计算,所以直接 mutate 不排队。跑完把报告留在按钮旁边——
-  // **零和零不一样**：没有公理时要说「无从判起」,不能说「未发现矛盾」
+  // The check is a synchronous, pure computation, so it mutates directly
+  // with no queue needed. After it runs, the report stays next to the
+  // button. **Zero is not the same as zero here**: with no axioms
+  // defined, the message must say "no criterion to check", not "no conflict found".
   const runCheck = useMutation({
     mutationFn: () => api.runConsistencyCheck(kb!.id),
     onSettled: invalidate,
@@ -798,11 +817,14 @@ export function Review() {
     onSettled: invalidate,
   });
 
-  // **徽标读服务端的 COUNT，不读列表长度。** 这是从前那个「库里 164、界面写
-  // 100」的根源：数组长度反映的是一页多少条，不是库里有多少条。
+  // **The badge reads the server's `COUNT`, not the list length.** This
+  // was the root cause of the earlier bug where the database held 164
+  // rows and the UI showed 100. An array's length reflects the page
+  // size, not the total row count in the database.
   const c = review.data?.counts;
-  // mappings 不是本页的一档（审批在「数据映射」页），但计数照收：
-  // 收件箱该说「有几条等你」
+  // `mappings` is not a queue on this page (approval happens on the
+  // "Data mappings" page), but this still fetches its count. The inbox
+  // should always state how many items are waiting.
   const counts: Record<Sel | "mappings", number> = {
     duplicates: c?.duplicates ?? 0,
     conflicts: c?.conflicts ?? 0,
@@ -814,8 +836,9 @@ export function Review() {
     merges: c?.merges ?? 0,
     decisions: history.data?.total ?? 0,
   };
-  // 当前这一档的一页。**服务端已经切好了**，这里只按档收窄类型——
-  // 收窄错了会在渲染时露馅，而不是悄悄显示空列表
+  // The current queue's page. **The server already sliced it**; this
+  // only narrows the type by queue. A wrong narrowing shows up at render
+  // time, instead of silently displaying an empty list.
   const rows = review.data?.queue === queueSel ? (review.data.items ?? []) : [];
   const asDuplicates = () => rows as ReviewItem[];
   const asFacts = () => rows as FactReviewItem[];
@@ -825,7 +848,8 @@ export function Review() {
   const asMerges = () => rows as MergeLog[];
   const queueEmpty = QUEUE_ORDER.every((k) => counts[k] === 0);
 
-  // 首批数据到达：定位到第一个非空队列（全空落在 duplicates 显示"干净"文案）
+  // On the first data load, this selects the first non-empty queue. If
+  // every queue is empty, this lands on "duplicates" and shows the "all clear" message.
   useEffect(() => {
     if (sel === null && c)
       setSel(QUEUE_ORDER.find((k) => counts[k] > 0) ?? "duplicates");
@@ -862,10 +886,12 @@ export function Review() {
 
   return (
     <div className="h-full flex">
-      {/* 左栏：队列分类 + 历史，各带实时计数（SSE 推动刷新） */}
-      {/* `overflow-y-auto`：矮窗口下这一栏的内容比它高，而底部那条是「去别处办」
-          的出口——没有滚动它会被裁掉且够不着。`mt-auto` 只在有富余空间时把它
-          压到底，两者要一起给 */}
+      {/* Left rail: queue categories plus history, each with a live count refreshed through SSE. */}
+      {/* `overflow-y-auto`: on a short window, this rail's content is
+          taller than the rail itself, and the bottom link goes to
+          another page. Without scrolling, that link would be clipped
+          and unreachable. `mt-auto` only pushes it to the bottom when
+          extra space exists, so both properties are needed together. */}
       <aside className={`${RAIL_CLS} flex flex-col overflow-y-auto u-scroll`}>
         <RailHeader label={S.review.tabQueue} />
         <div className="px-2 space-y-0.5">
@@ -922,12 +948,17 @@ export function Review() {
           />
         </div>
 
-        {/* 数据映射：**两组都不属于，所以压在底部单独一条。**
-            上面那七档问的都是「这条知识对不对」，而口径问的是「这个数怎么算」
-            （0011 已经在数据层把它分出去了）；下面那两档是本页办过的事的流水，
-            而口径的决定从来不进 `review_history`（它只捞 review./fact./
-            conflict./merge.，口径记的是 mapping.decided）。
-            **计数留着**——收件箱该说「有几条等你」，但活在有上下文的那一页干 */}
+        {/* Data mappings: **this belongs to neither group above, so it
+            sits alone at the bottom.** The seven queues above all ask
+            "is this piece of knowledge correct". A data mapping asks
+            "how is this number computed" (ADR 0011 already separated it
+            at the data level). The two items below this one are a log
+            of decisions made on this page, and a mapping decision never
+            enters `review_history` (that log only captures `review.`,
+            `fact.`, `conflict.`, and `merge.` actions; a mapping decision
+            records as `mapping.decided` instead). **The count stays
+            here**, because the inbox should state how many items are
+            waiting, even though the actual decision happens on that other page. */}
         <div className="mt-auto border-t border-white/5 px-2 py-2">
           <RailItem
             active={false}
@@ -941,7 +972,7 @@ export function Review() {
         </div>
       </aside>
 
-      {/* 右侧：一次只显示选中的一类，单一分页 */}
+      {/* Right side: shows only the selected category at a time, with a single pager. */}
       <div className="flex-1 min-w-0 overflow-y-auto u-scroll px-8 py-6">
         <div className="max-w-4xl">
           {review.isPending && (
@@ -955,7 +986,7 @@ export function Review() {
 
           {review.data && (
             <section>
-              {/* 页级标题：与 Library/KB Settings 同级（text-lg），不是卡片头 */}
+              {/* Page-level title: at the same level as Library and KB Settings (`text-lg`), not a card header. */}
               <h2 className="u-title text-lg mb-1">{SECTION[active].title}</h2>
               {SECTION[active].hint && (
                 <p className="text-xs text-neutral-500 mb-3">
@@ -963,8 +994,11 @@ export function Review() {
                 </p>
               )}
 
-              {/* 空态：整个待办全清 vs 单类清空。**公理这一档除外**——它自己那句要
-                  分清「查过、没矛盾」和「还没查过」，通用空态说不出这个差别 */}
+              {/* Empty state: the whole inbox is clear, versus one
+                  category being clear. **This excludes the axiom
+                  violations queue**, because its own message must
+                  distinguish "checked, no conflict" from "never
+                  checked", and the generic empty state cannot express that difference. */}
               {isQueueSel &&
                 active !== "violations" &&
                 active !== "defects" &&
@@ -1078,12 +1112,17 @@ export function Review() {
 
               {active === "violations" && (
                 <div className="space-y-3">
-                  {/* 按钮在这一档里，不在页头：只有看这一档的人才想重跑。
-                      报告留在按钮旁边——空结果要说清是「没矛盾」还是「没判据」 */}
+                  {/* The button lives inside this queue, not in the page
+                      header, because only a user viewing this queue
+                      wants to rerun the check. The report stays next to
+                      the button; an empty result must state clearly
+                      whether that means "no conflict" or "no criterion to check". */}
                   <div className="flex items-center gap-3">
-                    {/* ghost 而不是实心白：这和「探查映射」是同一种东西——
-                        手动触发一次分析，不是这一页的主操作。留一个实心白给
-                        真正的决定（确认 / 合并） */}
+                    {/* This uses the ghost style, not solid white. It is
+                        the same kind of action as "explore mappings": a
+                        manual trigger for an analysis, not the primary
+                        action on this page. Solid white stays reserved
+                        for a real decision, such as confirm or merge. */}
                     <button
                       className="u-btn u-btn-ghost px-3 py-1.5 text-xs"
                       disabled={runCheck.isPending}
@@ -1095,9 +1134,12 @@ export function Review() {
                     </button>
                     {runCheck.data && (
                       <span className="text-xs text-neutral-500">
-                        {/* 三种结果说三句话。**`found` 不是要报的数**：
-                            重跑会把已裁决的那些重新算出来，说「3 处矛盾」而
-                            列表只剩一条，看起来像界面漏了东西 */}
+                        {/* Three outcomes get three different messages.
+                            **`found` is not the count to report.**
+                            Rerunning the check recomputes conflicts
+                            already decided; stating "3 conflicts found"
+                            while the list shows only one would look like
+                            the UI dropped the rest. */}
                         {runCheck.data.predicates_with_axioms === 0
                           ? S.review.checkNoAxioms
                           : runCheck.data.inserted > 0
@@ -1162,7 +1204,7 @@ export function Review() {
                   </div>
                 ))}
 
-              {/* 单一分页：queue/merges 走客户端切片，decisions 服务端分页 */}
+              {/* A single pager: queue and merge lists page on the client; the decisions list pages on the server. */}
               {active !== "decisions" && (
                 <Pager
                   total={counts[active]}
