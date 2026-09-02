@@ -1,6 +1,8 @@
-/* Chat：agentic 对话（检索/图谱工具 + remember 记忆）。
-   会话持久化：左栏会话列表;上下文由服务端拼,前端只发 conversation_id + 新消息;
-   行动轨迹(steps)与引用(sources)随消息落库,历史回放与实时流共用渲染。 */
+/* Chat: an agentic conversation, with search and graph tools plus a remember tool.
+   Conversation persistence: the left rail lists conversations. The server builds the
+   context; the frontend sends only conversation_id and the new message. The action
+   trace (steps) and citations (sources) save with each message. Playback of history and
+   the live stream share the same rendering code. */
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useNavigate, useParams } from "@tanstack/react-router";
@@ -37,10 +39,11 @@ import { useKb, useKbId } from "../kb";
 import { DangerConfirm, RAIL_CLS } from "../ui";
 import { liveAnswer, type Turn } from "../liveAnswer";
 
-/* `Turn` 定义在 liveAnswer 里：进行中的那一次也是一串 Turn，
-   而它必须活得比这个组件长（见那个文件顶上的说明） */
+/* `Turn` is defined in liveAnswer.ts. A turn still in progress is also a Turn, and it
+   must outlive this component (see the note at the top of that file). */
 
-/** 同标签页记忆：上次会话（按库）与未发送草稿——切页回来还原，新标签页从头开始 */
+/** Same-tab memory: the last conversation per KB, and an unsent draft. This state
+ * restores when the user returns to the page, and starts empty in a new tab. */
 const lastKey = (kbId: string) => `chat:last:${kbId}`;
 const DRAFT_KEY = "chat:draft";
 
@@ -49,44 +52,53 @@ export function Chat() {
   const { kb, kbs, setKb } = useKb();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-  // 会话即路由：/chat/$conversationId，URL 是当前会话的唯一事实来源（刷新/回退天然可用）
+  // A conversation is a route: /chat/$conversationId. The URL is the single source of
+  // truth for the current conversation, so a refresh or back navigation works naturally.
   const { conversationId: routeConvId } = useParams({ strict: false }) as {
     conversationId?: string;
   };
   const [activeId, setActiveId] = useState<string | null>(null);
-  // 路由同步 effect 的判据：state 的提交时序晚于 navigate 触发的重渲染，
-  // 用 ref 同步写入才能让"流式新建后仅换 URL"的守卫可靠命中
+  // The route-sync effect checks this ref. A state update commits later than the
+  // re-render that navigate triggers. Writing to a ref synchronously makes the guard for
+  // "only the URL changes after streaming creates a conversation" reliable.
   const activeIdRef = useRef<string | null>(null);
-  // 已经结束的那些轮次，从库里读来。**进行中的那一次不在这里**——见下
+  // Turns already finished, read from the database. **The turn in progress is not here.**
+  // See below.
   const [turns, setTurns] = useState<Turn[]>([]);
   const [input, setInput] = useState(() => sessionStorage.getItem(DRAFT_KEY) ?? "");
-  // 进行中的那一次活在组件之外，所以切走再回来它还在（见 liveAnswer.ts）。
-  // 新建会话时它的 id 是 null，而此时 activeId 也是 null，两者对得上
+  // The turn in progress lives outside this component, so it survives when the user
+  // navigates away and back (see liveAnswer.ts). For a new conversation, its id is null,
+  // and activeId is also null, so the two match.
   const live = useSyncExternalStore(liveAnswer.subscribe, liveAnswer.get);
-  /* **是「这一场」在流，不是「有一场」在流。**
-     写成全局的话，另一场在生成时这一场的输入框也会变成停止按钮、发不出消息，
-     而且最后一轮会被当成还在流——引用于是被藏起来（那条判据见 TurnView）。
-     一个正在别处生成的回答不该改变这里的任何东西 */
-  /* **按 URL 认领，不按 state。** 这个文件开头就写着「URL 是当前会话的唯一
-     事实来源」，而这里一度用了 `activeId`——它是 state，切走再回来时更新得
-     比第一次渲染晚，于是那一帧认不出自己，屏幕空着。用地址栏里的那个 id
-     就没有时序可言。新会话还没拿到 id 时两者都是空，也对得上 */
+  /* **This checks whether *this* conversation is streaming, not whether *any*
+     conversation is streaming.** A global flag would turn this input box into a stop
+     button, and block sending, while another conversation streams elsewhere. It would
+     also mark the last turn here as still streaming, which hides its sources (see the
+     check in TurnView). A response generating elsewhere must not change anything here. */
+  /* **This claims the conversation by URL, not by state.** The top of this file states
+     that the URL is the single source of truth for the current conversation. An earlier
+     version used `activeId` instead, a piece of state that updates later than the first
+     render after navigation, so that first render did not recognize its own conversation
+     and showed an empty screen. The id in the address bar has no such timing issue. For
+     a new conversation with no id yet, both values are null, so they still match. */
   const currentId = routeConvId ?? activeId;
   const liveHere = live && live.conversationId === currentId ? live : null;
   const streaming = liveHere?.streaming ?? false;
   const shown = liveHere ? liveHere.turns : turns;
   const [scopeOpen, setScopeOpen] = useState(false);
   const [pendingDelete, setPendingDelete] = useState<ConversationRow | null>(null);
-  // 会话搜索。**搜标题也搜正文**——人记得住的往往是问过的那句话
+  // Conversation search. **This searches both the title and the message text,** because
+  // a user often remembers the question they asked, not the title.
   const [convSearch, setConvSearch] = useState("");
-  // 三点菜单展开的是哪一条。同时只开一个
+  // Which row has its three-dot menu open. Only one menu is open at a time.
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const abortRef = useRef<(() => void) | null>(null);
   const scopeRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // 作用域弹层：点外面 / Esc 关闭（与 ui/Dropdown 同惯例）
+  // The scope popover closes on an outside click or on Escape, the same convention as
+  // ui/Dropdown.
   useEffect(() => {
     if (!scopeOpen) return;
     const onDoc = (e: MouseEvent) => {
@@ -109,7 +121,8 @@ export function Chat() {
     enabled: !!kb,
     placeholderData: (prev) => prev,
   });
-  // 改标题：**就地编辑**，不弹对话框——改一个名字不值得打断整页
+  // Renaming a conversation: **this edits in place** and does not open a dialog.
+  // Changing a name does not need to interrupt the whole page.
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState("");
   const rename = useMutation({
@@ -122,18 +135,21 @@ export function Chat() {
     onError: (e: Error) => toast.error(e.message),
   });
 
-  // 直落底部（instant）：平滑滚动在流式追加下会一路慢爬
+  // Scrolls to the bottom instantly. Smooth scrolling would crawl slowly as streamed
+  // text keeps appending.
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "instant" });
   }, [shown]);
 
-  // 切库回到新会话（首次拿到 kb 不算切换——直刷 /chat/$id 时不能把 URL 冲掉）
+  // Switching the KB scope starts a new conversation. The first time the page gets a KB
+  // does not count as a switch, so a direct load of /chat/$id keeps its URL.
   const prevKbRef = useRef<string | null>(null);
   useEffect(() => {
     const prev = prevKbRef.current;
     prevKbRef.current = kb?.id ?? null;
     if (prev && kb && prev !== kb.id) {
-      // **不 abort**：换库不该杀掉另一个库里正在写的回答，它落到那边的会话里
+      // **This does not abort.** Switching the KB must not stop a response streaming for
+      // another KB; that response still saves to its own conversation.
       activeIdRef.current = null;
       setActiveId(null);
       setTurns([]);
@@ -142,7 +158,8 @@ export function Chat() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kb?.id]);
 
-  // 路由 → 会话装载；裸 /chat 还原本库上次会话（切页回来仍在原对话）
+  // Loads a conversation from the route. A bare /chat restores the KB's last conversation,
+  // so returning to the page keeps the same conversation.
   useEffect(() => {
     if (!kb) return;
     if (!routeConvId) {
@@ -156,12 +173,12 @@ export function Chat() {
       }
       return;
     }
-    if (routeConvId === activeIdRef.current) return; // 流式新建会话后仅 URL 同步，勿重载
+    if (routeConvId === activeIdRef.current) return; // After streaming creates a conversation, only the URL changes; skip reload.
     loadConversation(routeConvId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kb?.id, routeConvId]);
 
-  // 还原的草稿撑开输入框（高度平时由 onChange 维护）
+  // Sizes the input box to fit a restored draft. onChange keeps the height in sync otherwise.
   useEffect(() => {
     const el = inputRef.current;
     if (el && el.value) {
@@ -173,21 +190,24 @@ export function Chat() {
   const invalidateList = () =>
     queryClient.invalidateQueries({ queryKey: ["conversations", kb?.id] });
 
-  /** 列表点击只改 URL，装载由路由同步 effect 负责 */
+  /** A click in the list only changes the URL. The route-sync effect loads the conversation. */
   const openConversation = (id: string) =>
     navigate({
       to: "/kb/$kbId/chat/$conversationId",
       params: { kbId, conversationId: id },
     });
 
-  /** 接回一个正在生成的回答。没有在跑的话服务端回 `idle`，什么都不发生。 */
+  /** Reattaches to a response still generating. If none is running, the server returns
+   * `idle` and nothing happens. */
   const attachIfRunning = (id: string, history: Turn[]) => {
     let abort = () => {};
     const stop = reattachChat(kb!.id, id, {
       onConversation: () => {},
-      /* **快照到了才建这一轮。** 先摆一个空位再等回答的话，没有在跑的会话
-         上会闪一下空的助手气泡——而那是绝大多数情况。
-         快照是覆盖：它是那个回答此刻的全貌，不是增量 */
+      /* **This creates the turn only when the snapshot arrives.** Adding an empty turn
+         before the response is known would flash an empty assistant bubble on a
+         conversation with nothing running, which is the common case. The snapshot
+         replaces the turn's content; it is the full state of the response at that
+         moment, not a delta. */
       onSnapshot: (s) =>
         liveAnswer.start(
           id,
@@ -221,7 +241,8 @@ export function Chat() {
   };
 
   const loadConversation = async (id: string) => {
-    // 回到正在写的那一场：直接认领，别去库里读——库里要等它写完才有那一行
+    // Returning to a conversation that is still writing: claim it directly, and skip the
+    // database read. The database has this row only after writing finishes.
     if (liveAnswer.get()?.conversationId === id) {
       activeIdRef.current = id;
       setActiveId(id);
@@ -239,16 +260,18 @@ export function Chat() {
         sources: m.sources.length ? m.sources : undefined,
       }));
       setTurns(history);
-      /* **刷新之后接回去。** 上面那个 store 只活在这一个页面里；刷新、
-         新标签页、换台机器都拿不到它，而服务端那边生成还在跑。问一句
-         「这个会话有没有在跑的」——没有是最常见的答案，代价是一次会
-         立刻回 `idle` 的请求。
-         最后一条是用户说的话时才问：那正好是「问了但还没答上」的形状 */
+      /* **This reattaches after a page refresh.** The store above lives only on this
+         page; a refresh, a new tab, or a different machine cannot reach it, while
+         generation can still run on the server. This asks "is anything running for this
+         conversation?" The common answer is no, at the cost of one request that returns
+         `idle` right away. This asks only when the last message is from the user, which
+         is the shape of "asked but not yet answered". */
       if (history[history.length - 1]?.role === "user") {
         attachIfRunning(id, history);
       }
     } catch {
-      // 失效链接（会话已删 / 属于别的库）：安静回到新对话
+      // An invalid link (a deleted conversation, or one from another KB): return quietly
+      // to a new conversation.
       sessionStorage.removeItem(lastKey(kb!.id));
       activeIdRef.current = null;
       setActiveId(null);
@@ -258,7 +281,7 @@ export function Chat() {
   };
 
   const newChat = () => {
-    // 同样不 abort：开一场新的不等于放弃上一场
+    // Also does not abort: starting a new conversation does not give up the last one.
     if (kb) sessionStorage.removeItem(lastKey(kb.id));
     activeIdRef.current = null;
     setActiveId(null);
@@ -283,17 +306,19 @@ export function Chat() {
     sessionStorage.removeItem(DRAFT_KEY);
     if (inputRef.current) inputRef.current.style.height = "auto";
 
-    /* **结果留在 store 里，不交回组件状态。**
-       交回去要经过一个 `setTurns`，而流结束时这个组件可能早就卸载了——
-       那一下是空操作，内容就此消失（切回来一片空白，问题气泡都没有）。
-       留在 store 里，谁挂载谁认领 */
+    /* **The result stays in the store; it does not return to component state.**
+       Returning it would go through a `setTurns` call, and this component may already
+       be unmounted when the stream ends. That call would be a no-op, and the content
+       would be lost, showing a blank screen with not even the question bubble. Keeping
+       the result in the store lets whichever component mounts next claim it. */
     const abort = streamChat(
       kb.id,
       { conversation_id: activeId ?? undefined, message: q },
       {
         onConversation: (id) => {
           liveAnswer.identify(id);
-          // 先同步写 ref 再换 URL：路由同步 effect 因 id 相等而跳过重载，不打断流
+          // Writes the ref synchronously before changing the URL. The route-sync effect
+          // then sees a matching id and skips reload, so it does not interrupt the stream.
           activeIdRef.current = id;
           setActiveId(id);
           sessionStorage.setItem(lastKey(kb.id), id);
@@ -327,7 +352,9 @@ export function Chat() {
     );
   };
 
-  /* Composer 卡：新对话首屏居中出场，进入对话后停靠底部（同一块 JSX 两处复用） */
+  /* The composer card. It centers on a new conversation's first screen, then docks at
+     the bottom once the conversation has messages. This same JSX block is used in both
+     places. */
   const composerCard = (
     <div className="rounded-2xl border border-white/[0.12] bg-white/[0.04] backdrop-blur-md focus-within:border-white/30 transition-colors px-4 pt-3 pb-2">
       <textarea
@@ -352,7 +379,8 @@ export function Chat() {
       />
       <div className="flex items-center justify-between gap-3 pt-1">
         <div className="flex items-center gap-2.5 min-w-0">
-          {/* 作用域 chip：提问点位可见"在问哪个库"，切库沿用现有语义（开新会话） */}
+          {/* The scope chip shows which KB the question targets. Switching it here follows
+              the existing rule: it starts a new conversation. */}
           <div ref={scopeRef} className="relative shrink-0">
             <button
               onClick={() => setScopeOpen((v) => !v)}
@@ -400,7 +428,9 @@ export function Chat() {
         {streaming ? (
           <button
             onClick={() => {
-              // **只有这里 abort**——切页面、换会话、换库都不再打断（liveAnswer.ts）
+              // **This is the only place that aborts.** Navigating away, switching
+              // conversations, or switching KBs no longer interrupts the stream
+              // (see liveAnswer.ts).
               abortRef.current?.();
               liveAnswer.finish();
             }}
@@ -429,10 +459,11 @@ export function Chat() {
 
   return (
     <div className="h-full flex">
-      {/* 会话栏 */}
+      {/* The conversation rail */}
       <aside className={`${RAIL_CLS} flex flex-col`}>
         <div className="px-2 pt-3 pb-1">
-          {/* 与会话行同一套样式：左栏是一列同质的行，新对话只是第一行 */}
+          {/* This uses the same style as a conversation row. The rail is a column of
+              uniform rows, and "New chat" is simply the first row. */}
           <button
             onClick={newChat}
             className="w-full flex items-center gap-2 rounded-lg px-2.5 py-2 text-left text-[13px] text-neutral-300 hover:bg-white/[0.05] hover:text-white transition-colors"
@@ -441,8 +472,9 @@ export function Chat() {
             {S.ask.newChat}
           </button>
         </div>
-        {/* 搜索。**标题重是常态**（同一个问题问两次就重了），而正文里那句话
-            才是人记得住的——所以服务端两处都搜 */}
+        {/* Search. **Duplicate titles are common,** because asking the same question
+            twice creates a duplicate title. The message text is what a user remembers,
+            so the server searches both fields. */}
         <div className="px-2 pb-2">
           <input
             className="input-dark w-full px-2.5 py-1.5 text-[12.5px]"
@@ -460,9 +492,11 @@ export function Chat() {
                 c.id === activeId ? "u-nav-active" : "hover:bg-white/[0.05]"
               }`}
             >
-              {/* 单行标题；删除键悬停浮现（弹确认，不直接删） */}
+              {/* A single-line title. The delete action appears on hover, and it opens a
+                  confirm dialog instead of deleting right away. */}
               {renamingId === c.id ? (
-                /* 就地编辑：Enter 保存、Esc 取消。改一个名字不值得弹对话框 */
+                /* Edits in place: Enter saves, Escape cancels. Changing a name does not
+                   need a dialog. */
                 <input
                   autoFocus
                   className="input-dark w-full px-2 py-1.5 text-[13px]"
@@ -489,8 +523,9 @@ export function Chat() {
                   </span>
                 </button>
               )}
-              {/* 三点菜单：**一个入口装下所有动作**。从前右边直接是删除，
-                  而删除是这里最不该一步到位的那个 */}
+              {/* The three-dot menu: **one entry point holds all actions.** An earlier
+                  version put delete directly on the right edge, but delete is the action
+                  that most needs a confirm step, not a one-click action. */}
               {renamingId !== c.id && (
                 <button
                   onClick={() => setMenuFor(menuFor === c.id ? null : c.id)}
@@ -502,8 +537,9 @@ export function Chat() {
               )}
               {menuFor === c.id && (
                 <>
-                  {/* 点别处就关。铺满全屏而不是监听 document：不必在卸载时
-                      记得摘监听器 */}
+                  {/* Closes on an outside click. This overlay covers the full screen
+                      instead of listening on document, so there is no listener to
+                      remove on unmount. */}
                   <div
                     className="fixed inset-0 z-10"
                     onClick={() => setMenuFor(null)}
@@ -548,12 +584,15 @@ export function Chat() {
         </div>
       </aside>
 
-      {/* 对话区：新对话首屏 = 问候 + 居中 composer（ChatGPT/Claude 惯例）；
-          有消息后 composer 停靠底部 */}
+      {/* The conversation area. A new conversation's first screen shows a greeting with
+          a centered composer, the convention used by ChatGPT and Claude. Once the
+          conversation has messages, the composer docks at the bottom. */}
       <div className="flex-1 min-w-0 flex flex-col">
         {shown.length === 0 ? (
-          /* 锚定上三分之一而非垂直居中：居中在高窗口下会显得下坠。
-             22vh + 顶部 chrome(~100px) ≈ 问候落在 37% 高度、composer 中心 ~49% */
+          /* This anchors to the upper third of the screen, not the vertical center. A
+             vertical center looks too low on a tall window. 22vh plus roughly 100px of
+             top chrome puts the greeting at about 37% height and the composer center
+             at about 49%. */
           <div className="flex-1 px-4 pt-[22vh]">
             <div className="w-full max-w-3xl mx-auto">
               <h1
@@ -599,16 +638,17 @@ export function Chat() {
   );
 }
 
-/** 一段正文，或一组同时发生的调用。 */
+/** One block of text, or one group of calls that happened at the same time. */
 type Segment =
   | { kind: "text"; text: string; last: boolean }
   | { kind: "steps"; steps: ChatStep[] };
 
-/** 把一轮回复拆成按发生顺序排列的段。
+/** Splits one turn's reply into segments, ordered by when each part happened.
  *
- *  切分点是 `step.at`——那一步发生时正文已经有多长。**这条迁移之前落库的
- *  消息没有 `at`**，那时的顺序信息是真的没有存下来，编不出来也不该编：
- *  它们退回旧样子，整段轨迹在最前面。 */
+ *  The split point is `step.at`: how long the text was when that step happened. **A
+ *  message saved before this migration has no `at` value.** That order information was
+ *  never stored, so this code does not invent it. Those older messages fall back to the
+ *  old layout, with the whole trace first. */
 function segments(turn: Turn): Segment[] {
   const steps = turn.steps ?? [];
   const text = turn.content ?? "";
@@ -625,7 +665,8 @@ function segments(turn: Turn): Segment[] {
   let cursor = 0;
   for (let i = 0; i < steps.length; ) {
     const at = steps[i].at!;
-    // 同一位置的连成一组：一轮里的多次调用之间没有正文，它们本来就是一次扇出
+    // Groups steps at the same position. Multiple calls in one turn with no text between
+    // them are one fan-out, by nature.
     let j = i;
     while (j < steps.length && steps[j].at === at) j++;
     const before = text.slice(cursor, at);
@@ -644,23 +685,24 @@ function stepIcon(kind: ChatStep["kind"]) {
   if (kind === "docs") return <BookOpen size={11} />;
   if (kind === "entity") return <Waypoints size={11} />;
   if (kind === "facts") return <History size={11} />;
-  // facts 读世界轴、changes 读认知轴，两个图谱工具给不同的图标——
-  // 用户看步骤条时该看得出问的是哪根轴
+  // The `facts` tool reads the world axis and `changes` reads the knowledge axis. These
+  // two graph tools use different icons, so the user can tell which axis a step queries.
   if (kind === "changes") return <GitCompareArrows size={11} />;
   if (kind === "query") return <Database size={11} />;
   return <Wrench size={11} />;
 }
 
-/** 工具步骤 → 球体状态：思考球讲当前动作的语言 */
+/** Maps a tool step to an orb state, so the thinking orb reflects the current action. */
 function orbState(kind?: ChatStep["kind"]): OrbState {
   if (kind === "search" || kind === "docs") return "searching";
   if (kind === "entity") return "connecting";
   if (kind === "facts" || kind === "changes") return "solving";
   if (kind === "query" || kind === "tool") return "working";
-  return "listening"; // 尚无步骤：刚接到消息
+  return "listening"; // No step yet: the message just arrived.
 }
 
-/** 思考指示：thinking-orbs 球体 + 当前动作（应用是深色定妆，theme 钉死 dark）。 */
+/** The thinking indicator: a thinking-orbs sphere plus the current action. The app uses
+ * a fixed dark theme, so theme is set to "dark". */
 function Thinking({ step }: { step?: ChatStep }) {
   return (
     <span className="inline-flex items-center gap-2.5 text-neutral-500">
@@ -691,13 +733,16 @@ function TurnView({ turn, live }: { turn: Turn; live?: boolean }) {
 
   return (
     <div className="max-w-[95%]">
-      {/* agent 回复无气泡：正文直接落在画布上（用户消息保留气泡以区分角色） */}
+      {/* An agent reply has no bubble: its text sits directly on the canvas. A user
+          message keeps its bubble, to tell the roles apart. */}
       <div className="py-1 text-sm text-neutral-200 leading-relaxed">
-        {/* **轨迹按发生的顺序穿在正文里。**
-            模型是边说边查的：说一句、调一次、再说一句。把调用整块提到最前面，
-            读起来就成了「先查七次再一口气说完」——那不是它做的事，而且相邻两次
-            调用之间那句「我先看看这一个」失去了它解释的对象。
-            同一轮里的多次调用共享一个位置，于是自然并成一组——一组就是一轮 */}
+        {/* **The trace runs through the text in the order it happened.** The model talks
+            and calls tools by turns: a sentence, a call, another sentence. Moving all
+            calls to the front would read as "seven searches, then the full answer",
+            which is not what happened, and it would separate a sentence such as "let me
+            check this one" from the call it explains. Multiple calls at the same position
+            in one turn share that position, so they group together naturally, and each
+            group is one turn. */}
         {segments(turn).map((seg, i) =>
           seg.kind === "steps" ? (
             <div
@@ -713,10 +758,12 @@ function TurnView({ turn, live }: { turn: Turn; live?: boolean }) {
               ))}
             </div>
           ) : (
-            /* react-markdown 承载渲染（皮肤全归 u-chat-prose 设计系统），
-               流式中经 remend 修补未闭合语法（粗体/围栏/链接），
-               rehype-highlight 做代码高亮——成熟件组装，观感自持。
-               **只有还在长的那一段需要 remend**：先前的段落已经收尾了 */
+            /* react-markdown renders the text, with all styling in the u-chat-prose
+               design system. During streaming, remend repairs unclosed syntax such as
+               bold, fenced code, and links. rehype-highlight adds code highlighting.
+               These parts are established libraries assembled together, and the look
+               stays consistent. **Only the segment still growing needs remend,** because
+               an earlier segment has already closed. */
             <div key={i} className="u-chat-prose">
               <Markdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeHighlight]}>
                 {live && seg.last ? remend(seg.text) : seg.text}
@@ -727,15 +774,17 @@ function TurnView({ turn, live }: { turn: Turn; live?: boolean }) {
         {thinking && <Thinking step={lastStep} />}
         {turn.error && <div className="text-rose-400">{turn.error}</div>}
       </div>
-      {/* **引用等答案说完再出。**
-          `sources` 是随检索一次次增量发来的，跟着渲染的话，一份还在生长的清单
-          就挂在一段还没写完的话下面，一边长一边把正文往上推。它是答案的落款，
-          不是过程的一部分——过程已经由上面的轨迹交代了 */}
+      {/* **Sources appear only after the answer finishes.** `sources` arrives in
+          increments as retrieval runs. Rendering it as it arrives would attach a
+          growing list to a sentence still being written, and it would keep pushing the
+          text upward. Sources are the answer's signature, not part of the process; the
+          trace above already explains the process. */}
       {!live && turn.sources && turn.sources.length > 0 && (
         <div className="mt-2 space-y-1">
           {turn.sources.map((s) =>
             s.kind === "charter" ? (
-              /* 手册引用：视觉上与数据引用隔离（BookOpen），跳排版好的 /docs 小节 */
+              /* A guide citation. Its BookOpen icon sets it apart from a data citation,
+                 and it links to a formatted section in /docs. */
               <Link
                 key={s.n}
                 to="/docs/$slug"
@@ -747,7 +796,7 @@ function TurnView({ turn, live }: { turn: Turn; live?: boolean }) {
                 <span className="u-num text-[var(--u-accent)]">[{s.n}]</span>
                 <BookOpen size={11} className="shrink-0 text-neutral-600" />
                 <span className="truncate">
-                  {/* 引言节 heading 即文章名，避免 "X › X" */}
+                  {/* When the heading equals the article name, this skips "X › X". */}
                   {s.heading && s.heading !== s.filename
                     ? `${s.filename} › ${s.heading}`
                     : s.filename}
