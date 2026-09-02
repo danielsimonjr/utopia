@@ -1,48 +1,62 @@
--- 关系的逆与父属性（R1 的后两种规则源，见 docs/decisions/0002）。
+-- A relation's inverse and parent property (the last two rule sources for check R1; see
+-- docs/decisions/0002).
 --
--- ADR 0002 给 R1 定的规则来源是四种：`TransitiveProperty` / `SymmetricProperty` /
--- `inverseOf` / `subPropertyOf`。前两种一直在跑，后两种**连列都没有**——
--- 0013 的 `rules.kind` 注释把这件事记下来了：
+-- ADR 0002 lists four rule sources for R1: TransitiveProperty, SymmetricProperty,
+-- inverseOf, and subPropertyOf. The first two have always run; the last two **had no
+-- column at all** — a comment on rules.kind in migration 0013 recorded this fact:
 --
--- > `inverseOf` 与 `subPropertyOf` 投影侧还没落库，所以也就编不出来
+-- > inverseOf and subPropertyOf are not stored yet on the import projection side, so no
+-- > rule compiles for them either
 --
--- 这条迁移补上投影侧。缺的后果不是「少推几条」，是**答案不对称**：本体声明了
--- `works_at⁻¹ = employs`，而问「谁在 Acme 工作」和「Acme 雇了谁」会得到不同答案，
--- 除非两个方向都被断言过——那正是 R1 该消灭的重复劳动。
+-- This migration adds that missing projection. The cost of the gap was not "fewer
+-- derivations"; it was **an asymmetric answer**: if the ontology declares works_at's
+-- inverse as employs, asking "who works at Acme" and "who does Acme employ" would give
+-- different answers, unless both directions were asserted separately by hand — exactly
+-- the duplicate work R1 exists to remove.
 ALTER TABLE relation_types
-    -- `p⁻¹ = q`。**单向存，双向用。**
+    -- p's inverse is q. **This is stored in one direction, and used in both.**
     --
-    -- 不加触发器去自动回填 `q.inverse_of = p`：那会把一条语义规则藏进数据库，
-    -- 而绕过它的路不止一条（RDF 导入、直接 SQL）。改在读取公理时归一化——
-    -- 载入那一处认这件事，绕不过去，也测得动（`reasoning::axioms_of`）。
+    -- This migration does not add a trigger to auto-fill q.inverse_of = p. A trigger
+    -- would hide a semantic rule inside the database, and more than one path can bypass
+    -- it (an RDF import, or direct SQL). Normalizing this happens instead when the axioms
+    -- are read: the loading step is the one place that must handle this, cannot be
+    -- bypassed, and can be tested directly (reasoning::axioms_of).
     ADD COLUMN inverse_of UUID REFERENCES relation_types(id) ON DELETE SET NULL,
-    -- `p ⊑ q`：断言了具体的，通用的也成立（`ceo_of ⊑ works_at`）。
-    -- 链要防成环，R0 那边加检查——与 `entity_types` 的父类环是同一类问题
+    -- p is a sub-property of q: whatever holds under the specific relation also holds
+    -- under the general one (ceo_of is a sub-property of works_at). A chain here must be
+    -- checked for cycles on the R0 side, the same kind of problem as a cycle in
+    -- entity_types' parent classes.
     ADD COLUMN sub_property_of UUID REFERENCES relation_types(id) ON DELETE SET NULL;
 
--- 自己不能是自己的父属性。**自己可以是自己的逆**——那等于对称，
--- 是合法的声明（R0 会提示改用 `symmetric` 更直白，但不算错）
+-- A relation cannot be its own parent property. **A relation can be its own inverse** —
+-- that is equivalent to symmetric, and is a valid declaration (check R0 suggests using
+-- symmetric instead, for clarity, but does not treat this as an error).
 ALTER TABLE relation_types
     ADD CONSTRAINT relation_types_sub_property_not_self
         CHECK (sub_property_of IS NULL OR sub_property_of <> id);
 
--- 归一化要按「谁指着我」反查，编译规则时每个谓词问一次
+-- Normalization needs the reverse lookup, "which rows point at me," once per predicate
+-- when rules compile.
 CREATE INDEX relation_types_inverse_idx ON relation_types (inverse_of)
     WHERE inverse_of IS NOT NULL;
 CREATE INDEX relation_types_sub_property_idx ON relation_types (sub_property_of)
     WHERE sub_property_of IS NOT NULL;
 
--- 两处 CHECK 跟着放开：新规则与新缺陷都是 0013 那两张表没预见到的取值。
+-- Both CHECK constraints below expand to match: the new rule kind and the new defect
+-- kinds are values migration 0013's two tables did not anticipate.
 --
--- **不是补漏，是那时确实还没有。** 0013 的注释写着「`inverseOf` 与
--- `subPropertyOf` 投影侧还没落库，所以也就编不出来」——这条迁移补上投影侧，
--- 约束自然要跟着扩。
+-- **This is not a missed case; those values genuinely did not exist yet.** The comment
+-- in migration 0013 states plainly that "inverseOf and subPropertyOf are not stored yet
+-- on the import projection side, so no rule compiles for them either." This migration
+-- adds that projection, so the constraints naturally expand along with it.
 ALTER TABLE rules DROP CONSTRAINT IF EXISTS rules_kind_check;
 ALTER TABLE rules ADD CONSTRAINT rules_kind_check
     CHECK (kind IN ('transitive', 'symmetric', 'inverse', 'sub_property'));
 
--- 三条新的本体自检：自己是自己的逆（等于 symmetric，提示改写）、
--- 逆没指回来（载入时只补空缺不覆盖，所以矛盾留到这里报）、子属性成环
+-- Three new ontology self-checks: a relation declared as its own inverse (equivalent to
+-- symmetric, so this suggests a rewrite), an inverse link that does not point back
+-- (loading only fills a missing link and never overwrites one, so a genuine
+-- contradiction is left for this check to report), and a cycle in sub-property links.
 ALTER TABLE ontology_defects DROP CONSTRAINT IF EXISTS ontology_defects_kind_check;
 ALTER TABLE ontology_defects ADD CONSTRAINT ontology_defects_kind_check
     CHECK (kind IN (
