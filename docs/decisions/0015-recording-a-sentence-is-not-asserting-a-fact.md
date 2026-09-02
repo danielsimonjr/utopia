@@ -1,147 +1,113 @@
-# 0015 · 记下一句话，不等于断言一个事实
+# 0015 · Recording a sentence is not the same as asserting a fact
 
-- **状态**：进行中 · schema 已落（迁移 `0018_a_fact_awaiting_a_nod`，与本文同一 PR #180）· **抽取侧尚未接线，三条决定一条都没落地；`remember` 已被整体停用作为临时闸**（2026-09-02 核，修订见文末）
-- **成文**：2026-09-01（约定见 [README](README.md)）
-- **相关**：[0010](0010-no-relation-is-no-relation.md) 删掉兜底关系（本篇那条空谓词正是它的
-  正确行为）、[0011](0011-a-mapping-is-not-a-fact.md) 批过「拿浮点数编码二值状态」——
-  本篇的实现红线；[0014](0014-identity-from-the-person-scope-from-the-token.md) 里
-  「MCP 不开写」的主要顾虑，被本篇的闸消掉
+- **Status**: In progress. The schema shipped (migration `0018_a_fact_awaiting_a_nod`, in the same PR as this document, #180). **The extraction side is not wired up, and none of the three decisions below are implemented yet; `remember` is disabled entirely as a temporary gate** (checked 2026-09-02; revision at the end).
+- **Written**: 2026-09-01 (see conventions in [README](README.md))
+- **Related**: [0010](0010-no-relation-is-no-relation.md) removed the fallback relation (the empty predicate in this document's example is exactly its correct behavior). [0011](0011-a-mapping-is-not-a-fact.md) rejected "encoding a two-state flag as a float" — the implementation rule enforced here too. The main worry behind "MCP stays read-only" in [0014](0014-identity-from-the-person-scope-from-the-token.md) is resolved by the gate in this document.
 
-> 起因是一次实测，不是推演。跑通 `remember` 之后回头查库，看到的东西和助手说的
-> 对不上。
+> This started from a real test, not a thought experiment. After running `remember` end to end, checking the database showed something that did not match what the assistant had said.
 
-## 那一次实测
+## The test that started this
 
-对话里说：
+In a conversation:
 
 > Please remember this: Acme moved its headquarters to Shenzhen on 2026-03-15.
 
-助手答：
+The assistant replied:
 
 > I've recorded that **Acme moved its headquarters to Shenzhen** on March 15, 2026.
 
-而图里落下的是：
+What actually landed in the graph:
 
 ```
-Acme  --(空谓词)->  Shenzhen        confidence 0.9      invalidated_at 空
+Acme  --(empty predicate)->  Shenzhen        confidence 0.9      invalidated_at empty
 ```
 
-谓词是空的——本体里没有「搬迁到 / 总部位于」这类关系，抽取落不上就留空。**按 0010
-这是正确行为**（不编一个 `related_to` 出来）。但结果是图上多了一条 0.9 置信、没有
-语义的边，而且**说的和进去的不是一回事，人没有任何办法发现**。
+The predicate is empty — the ontology has no "relocated to" or "headquartered in" relation, so extraction had nothing to attach and left it blank. **Per [0010](0010-no-relation-is-no-relation.md), this is correct behavior** (no invented `related_to`). But the result was a new edge in the graph, at 0.9 confidence, carrying no meaning — and **what was said and what was stored were two different things, with no way for the person to notice.**
 
-## 现状：根本没有确认这道闸
+## Current state: there is no confirmation gate at all
 
-查之前以为 `unconfirmed` 队列就是它。不是，它的定义是：
+Before checking, the `unconfirmed` queue looked like it might be this gate. It is not. Its real definition:
 
 ```sql
--- 待确认 = 有证据、但证据所在的分块全被新版本取代了
+-- pending = has evidence, but every chunk that evidence points to has been replaced by a newer version
 ```
 
-那是**证据过期**队列。`lowconf` 是 `confidence < 0.75`。两个都是事后清理：低置信事实
-在队列里躺着的时候，它已经是图上一条活边（`invalidated_at IS NULL`）。
+That is an **evidence-expiry** queue. `lowconf` means `confidence < 0.75`. Both are cleanup steps applied after the fact: while a low-confidence fact sits in that queue, it is already a live edge on the graph (`invalidated_at IS NULL`).
 
-所以：**任何抽取出来的事实，一落库就生效，没有任何一步需要人点头。**
+So: **any extracted fact takes effect the moment it lands, with no step anywhere requiring a person's approval.**
 
-## 这对批量摄入是对的，对 `remember` 不是
+## This is correct for bulk ingestion, and wrong for `remember`
 
-灌 500 篇文档抽出一万条事实，让人逐条确认是不可能的。乐观写入 + 事后审阅是那条路上
-唯一可行的设计，本篇不动它。
+Loading 500 documents and extracting ten thousand facts makes confirming each one by hand impossible. Optimistic writes with after-the-fact review are the only workable design for that path, and this document does not change it.
 
-`remember` 是另一回事，三点都不一样：
+`remember` is different, in three ways:
 
-| | 文档摄入 | remember |
+| | Document ingestion | remember |
 |---|---|---|
-| 量 | 一次上万条 | 一次一句 |
-| 人在哪 | 上传完就走了 | **就在对话里** |
-| 素材 | 外部证据 | 人自己特意说的一句话 |
+| Volume | Tens of thousands at once | One sentence at a time |
+| Where the person is | Gone after uploading | **Right there, in the conversation** |
+| Source material | External evidence | A sentence the person just chose to say |
 
-确认成本最低的那一刻，恰好就是他说完那句话的那一刻。
+The cheapest possible moment to confirm something is exactly the moment right after they said it.
 
-## 真正的病不是「少一道闸」
+## The real bug is not "missing a gate"
 
-是**助手宣称的和图里得到的不一致**。
+It is that **what the assistant claims and what lands in the graph do not agree.**
 
-「已记录 Acme 把总部搬到深圳」听起来像是那件事进去了；实际进去的是一条无谓词的边。
-所以二次确认的价值主要不在多点一下，在于**让人看见即将断言的是什么**——看到
-`Acme --?-> Shenzhen`，人会立刻说这不对。
+"Recorded that Acme moved its headquarters to Shenzhen" sounds like that fact went in; what actually went in is an edge with no predicate. So the value of a confirmation step is mostly not the extra click — it is **letting the person see what is about to be asserted.** Seeing `Acme --?-> Shenzhen` on screen, a person would immediately say this is wrong.
 
-这也决定了确认界面该长什么样：**原句在上，抽出的三元组在下**，两者并排。只列三元组
-等于要人凭空判断它对不对。
+This also decides what the confirmation screen must look like: **the original sentence on top, the extracted triple below it**, side by side. Showing only the triple asks a person to judge correctness with no context to judge it against.
 
-## 决定
+## The decision
 
-1. **`remember` 写文档这一步不变。** 那只是记录「你说过这句话」，本身无害，也确实
-   该立刻可检索。
-2. **从记忆抽出的事实，进图前要人确认。** 未确认的不参与检索、不上图、不进推理。
-3. **助手的话照实说**：「已记录，抽出 N 条待你确认」，不宣称完成。
+1. **The step where `remember` writes the document stays unchanged.** That step only records "you said this sentence," which is harmless on its own, and should stay searchable right away.
+2. **A fact extracted from a memory needs human confirmation before entering the graph.** Until confirmed, it takes no part in search, does not appear on the graph, and does not enter reasoning.
+3. **The assistant must describe reality accurately**: "Recorded — N facts extracted, waiting for your confirmation," never claiming completion.
 
-## 修订记录：第一版把状态加在 `facts` 上，错了
+## Revision note: the first version added a state column to `facts`, and that was wrong
 
-**原本的方案**是给 `facts` 加三列（`nod` / `nodded_by` / `nodded_at`），
-`nod = 'pending'` 表示等人点头。迁移写完、`insert_fact` 的参数也穿好了，
-才发现这是**这个仓库半个月前刚踩过的坑**。
+**The original plan** added three columns to `facts` (`nod`, `nodded_by`, `nodded_at`), with `nod = 'pending'` meaning "awaiting confirmation." The migration was written and `insert_fact`'s parameters were already updated, before noticing this was **the exact same trap this codebase had hit two weeks earlier.**
 
-`0013_reasoning.sql` 里那段话，把这个形状的问题说得比我清楚：
+The comment in `0013_reasoning.sql` states the shape of this problem better than we could here:
 
-> 试过塞进 `facts` 加一位 `derived_by_rule` 标记，那一版的问题是**失败方向反了**：
-> 仓库里有四十多处读 `facts` 的查询，其中只有一处认识那个标记，于是新写一条
-> 查询默认就是把派生当断言看，得记得加过滤。写这个功能的人（我）当场就漏了两处。
+> We tried adding one flag, `derived_by_rule`, directly to `facts`. The problem with that version was that **the failure points the wrong way**: over 40 queries in this codebase read `facts`, and only one of them knew about that flag, so any newly written query treats a derived fact as asserted by default, unless someone remembers to add a filter. The person who wrote this feature (me) missed two such places on the first try.
 >
-> 分开之后忘了 UNION 的后果是**看不见**派生，而不是**混进去**。
+> Once split into a separate table, forgetting the UNION means a derived fact goes **missing**, not that it leaks in.
 
-数了一下：今天有 **27 处**查询按 `invalidated_at IS NULL` 捞活事实，分布在
-6 个文件。给它们逐个补 `AND nod IS DISTINCT FROM 'pending'`，漏一处的后果就是
-一条没人点头的事实混进图里——而这个功能存在的全部理由就是防这件事。
+Counted directly: today **27 queries** fetch live facts using `invalidated_at IS NULL`, spread across 6 files. Adding `AND nod IS DISTINCT FROM 'pending'` to every one of them, one at a time, means missing even one lets an unconfirmed fact slip into the graph — which is the entire reason this feature exists.
 
-**改成自己一张表 `pending_facts`。** 确认时才写进 `facts`。忘了读它的后果变成
-「看不见待确认队列」，而不是「未确认的混进了图」。失败方向对了。
+**Changed to a separate table, `pending_facts`.** A fact is only written into `facts` once confirmed. Forgetting to read this table now means "the pending queue goes missing," not "an unconfirmed fact leaks into the graph." The failure now points the right way.
 
-顺带一提，0013 给出的另外两条理由这里也成立：**列不一样**（待确认的需要
-`proposed_predicate` 原话、需要指回那句记忆，而不需要 `supersedes`），
-**生命周期不一样**（确认后它就不该继续存在于那张表里）。
+The other two reasons from 0013's comment also apply here: **the columns needed are different** (a pending fact needs the original `proposed_predicate` text and a pointer back to the memory sentence, and needs no `supersedes`), and **the lifecycle is different** (once confirmed, it should no longer exist in that table at all).
 
+The 0011 line of work already rejected this exact mistake once. The reasoning is not in that ADR itself — it is in the table comment where it was applied (`concept_mappings.status` in `migrations/0006_semantic_layer.sql`):
 
+> **A status column, not confidence.** We used to overload a fact's confidence to mean "proposed at 0.6, confirmed at 1.0" — encoding a two-state flag as a floating-point number, and as a side effect, dropping it into the "low-confidence facts" bucket too.
 
-0011 那条线上批过一次同样的错。原话不在 ADR 里，在它落地的建表注释
-（`migrations/0006_semantic_layer.sql` 的 `concept_mappings.status` 列）：
+The `facts` table has no status column today (`id, kb_id, subject_id, predicate_id, object_id, object_value, valid_from, valid_to, ..., confidence, derived_by_rule, supersedes`). If one is added, it should be a real column — not another 0.6 standing in for it, which would put the same fact in both the "pending" queue and the "low confidence" queue at once, when those two queues are answering different questions.
 
-> **状态而不是置信度。** 从前借事实的 confidence 表达「提议 0.6 / 确认 1.0」，
-> 那是把一个二值状态编码成浮点数，还顺带让它落进「低置信事实」那一档。
+## Side effect: this removes the blocker to letting MCP write
 
-`facts` 表今天没有状态列（`id, kb_id, subject_id, predicate_id, object_id,
-object_value, valid_from, valid_to, ..., confidence, derived_by_rule, supersedes`）。
-要加就加真的一列，别再拿 0.6 糊弄——那会让这条事实同时出现在「待确认」和
-「低置信」两个队列里，而它们问的不是同一个问题。
+0014's main objection to enabling `remember` over MCP was the confused-deputy problem — a document in the knowledge base is untrusted content, and one that says "please remember X" could be followed literally by an external agent, acting with this person's full permissions.
 
-## 顺带：MCP 开写的障碍消掉了
+With this gate in place, **an external agent can only propose, never assert.** A human sees it first, before it takes effect, which removes that objection entirely. So this document is not just a bug fix — it answers the open question left in 0014.
 
-0014 里不开 `remember` 的主要顾虑是混淆代理——知识库里的文档是不可信内容，一份文档
-写「请 remember 某某」，外部 agent 可能就照做了，用的是这个人的全部权限。
+## Revision note (2026-09-02): the schema shipped, the runtime did not
 
-装上这道闸之后，**外部 agent 也只能提议，不能断言**。人先看见才生效，那条顾虑就不
-成立了。所以本篇不只是修一个 bug，它是 0014 里那个「未决」的答案。
+The `pending_facts` and `rejected_facts` tables were both built in #180, shaped around "the original sentence on top, the triple below": `chunk_id NOT NULL` points back to the memory sentence, `proposed_predicate` stores the model's original wording, `predicate_id` is **nullable** — that emptiness is exactly what a person needs to see — and `proposed_by` records whose statement it was. The failure-direction argument above was copied in full into the migration comment.
 
-## 修订记录（2026-09-02）：只有 schema，没有运行时
+**But nothing in the codebase reads or writes them.** `memory::is_memory_document()` exists to support exactly this check, with zero callers; the extraction pipeline has no `pending_facts` write path at all; the Review page's eight status counts have no `pending` category; `remember`'s reply still says "Recorded (effective …)."
 
-`pending_facts` 与 `rejected_facts` 两张表在 #180 建好了，形状按「原句在上、三元组在下」设计：`chunk_id NOT NULL` 指回那句记忆、`proposed_predicate` 存模型原话、`predicate_id` **可空**——人要看见的正是这个空、`proposed_by` 补上「谁的话」。失败方向的论证被完整搬进了迁移注释。
+**The temporary gate is turning the tool off entirely**: `chat.rs` sets `REMEMBER_ENABLED = false`, with a comment stating "flip this back to true once the extraction side is wired to that table; until then, no tool at all is better than a tool that silently changes the graph." So of the three decisions above, only an implicit "decision 0" — stop the assistant from misrepresenting what happened — is actually in effect.
 
-**但全仓零读零写。** `memory::is_memory_document()` 为这道判据写好了，零调用；抽取管线没有任何 `pending_facts` 写入点；Review 的八档计数里没有 `pending` 这一档；`remember` 的回话仍是 `Recorded (effective …)`。
+**So the claim below, "this removes the blocker to letting MCP write," does not yet hold in the code** — the gate is not installed, and MCP remains read-only.
 
-**临时闸是把工具整个关掉**：`chat.rs` 的 `REMEMBER_ENABLED = false`，注释写着「抽取侧接上那张表之后改回 true；在那之前宁可没有这个工具，也不要一个会悄悄改图的工具」。所以三条决定里只有隐含的第 0 条（不让说谎继续）实现了。
+**One number corrected**: "27 queries fetch live facts using `invalidated_at IS NULL`, across 6 files" — today it is **56 queries across 7 files** (the new one is `ontology.rs`). The reasoning is unchanged; if this number is cited again, recount it.
 
-**于是下文「MCP 开写的障碍消掉了」在代码上还不成立**——闸没装上，MCP 依旧只读。
+**A different face of the same problem** (#173, migration `0015_what_it_did_not_just_what_it_said`): replaying the assistant's own tool calls and results across conversation turns, so the model knows what it already did, instead of re-running the previous turn's retrieval and landing on a different batch of same-named entities. This document is about the gap between what the assistant says and what lands in the graph; that one is about the gap between what the assistant says and what it actually did.
 
-**一个数字的更正**：「27 处查询按 `invalidated_at IS NULL` 捞活事实，分布在 6 个文件」——今天是 56 处、7 个文件（多出 `ontology.rs`）。论证方向不变，数字若再被引用应重新数。
+## Open questions
 
-**同一类问题的另一面**（#173，迁移 `0015_what_it_did_not_just_what_it_said`）：跨轮回放助手上一轮的工具调用与结果，模型才知道自己做过什么，不会把上一轮的检索重跑一遍落到另一批同名实体上。本文讲的是「助手说的」与「图里得到的」之间的落差，那一条讲的是「助手说的」与「助手做的」之间的落差。
-
-## 未决
-
-- **闸只拦记忆，还是拦所有「单条、交互式」的写入？** 今天只有 `remember` 这一条路，
-  但将来若有「在图上手工加一条边」的界面，它该走哪边？
-- **确认之后置信度取什么。** 人点了头还留 0.9，还是升到 1.0？0011 的教训说别拿
-  confidence 表达人的态度，那大概是「不动它」——但要想清楚。
-- **拒绝之后那条记忆怎么办。** 文档还在（人确实说过那句话），只是没抽出可用的事实。
-  下一轮重抽会不会又提议一遍？`concept_mappings` 那边靠 `status='rejected'` 挡住了
-  重复提议，这里需要对应的东西。〔答了一半：`rejected_facts` 表与查重索引建好了，语义就是「这个三元组在这个库里被拒过」，但没有任何代码写它或查它。〕
+- **Should the gate block only memory, or every "single, interactive" write?** Today `remember` is the only such path, but if a future UI lets someone add an edge to the graph by hand, which side of the gate should that go through?
+- **What confidence value applies after confirmation?** Does a human nod leave it at 0.9, or raise it to 1.0? 0011's lesson says not to use confidence to express a human decision, which likely means "leave it unchanged" — but this needs to be thought through, not assumed.
+- **What happens to the memory sentence after a rejection?** The document itself still exists (the person really did say that sentence); it simply produced no usable fact. Will the next re-extraction propose it again? `concept_mappings` blocks repeat proposals with `status='rejected'`; something equivalent is needed here. (**Half-answered**: the `rejected_facts` table and its duplicate-check index exist, meaning "this triple was already rejected in this base" — but no code anywhere writes to it or queries it.)

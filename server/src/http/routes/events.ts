@@ -22,9 +22,17 @@ export function registerEventRoutes(api: Hono, state: AppState): void {
       await new Promise<void>((resolve) => {
         const unsubscribe = state.subscribeEvents((e) => {
           if (e.kbId !== kbId) return;
+          // Wire shape mirrors `crates/utopia-server/src/state.rs`'s
+          // `AppEvent` (snake_case); the frontend ignores the payload and
+          // only reacts to the event name, but the field names still need
+          // to match the Rust build for any other client.
           void stream.writeSSE({
             event: e.kind,
-            data: JSON.stringify(e),
+            data: JSON.stringify({
+              kb_id: e.kbId,
+              kind: e.kind,
+              document_id: e.documentId ?? null,
+            }),
           });
         });
         const ping = setInterval(() => {
