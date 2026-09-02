@@ -21,7 +21,10 @@ export async function enqueue(sql: Sql, kind: string, payload: unknown): Promise
     `INSERT INTO jobs (kind, payload) VALUES ($1, $2) RETURNING id`,
     [kind, payload],
   );
-  return rows[0]!.id;
+  // `postgres` returns BIGINT columns as strings by default (to avoid
+  // silent precision loss); job ids stay well under Number.MAX_SAFE_INTEGER
+  // in practice, so a plain JS number matches Rust's i64-as-JSON-number.
+  return Number(rows[0]!.id);
 }
 
 /** Claim one due job. Returns null when there is none. */
