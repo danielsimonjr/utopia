@@ -8,9 +8,10 @@
 
 import type { Sql } from "./core/db";
 import type { BlobStore } from "./blob";
-import type { SearchIndex } from "./search";
+import type { SearchIndex, DocsIndex } from "./search";
 import type { Uuid } from "./core/ids";
 import { Registry as LiveRegistry } from "./live";
+import { buildIndex as buildDocsIndex } from "./docs_corpus";
 
 /** In-process event (SSE push to the frontend for a local refetch). */
 export type AppEventKind = "document" | "review" | "graph" | "source" | "alert";
@@ -52,6 +53,7 @@ export type AppStateOptions = {
   jwtSecret: string;
   search: SearchIndex;
   blob: BlobStore;
+  docs?: DocsIndex;
   openRegistration: boolean;
   cookieSecure: boolean;
   dataDir: string;
@@ -64,6 +66,8 @@ export class AppState {
   readonly jwtSecret: string;
   readonly search: SearchIndex;
   readonly blob: BlobStore;
+  /** In-memory index of the built-in docs (the Charter): used by the chat `search_docs` tool. */
+  readonly docs: DocsIndex;
   readonly openRegistration: boolean;
   readonly cookieSecure: boolean;
   readonly dataDir: string;
@@ -79,6 +83,7 @@ export class AppState {
     this.jwtSecret = opts.jwtSecret;
     this.search = opts.search;
     this.blob = opts.blob;
+    this.docs = opts.docs ?? buildDocsIndex();
     this.openRegistration = opts.openRegistration;
     this.cookieSecure = opts.cookieSecure;
     this.dataDir = opts.dataDir;

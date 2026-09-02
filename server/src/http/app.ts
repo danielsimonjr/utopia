@@ -31,22 +31,16 @@ import { registerOntologyRoutes } from "./routes/ontology";
 import { registerSourceRoutes } from "./routes/sources";
 import { registerGraphRoutes } from "./routes/graph";
 import { registerReviewRoutes } from "./routes/review";
+import { registerChatRoutes } from "./routes/chat";
+import { registerMcpRoutes } from "./routes/mcp";
 
 /**
  * Routes declared in the Rust API surface (`api/mod.rs`) that this build
- * does not implement yet: chat, MCP, and the agentic tool surface. Each
- * one still responds on its exact method + path, with a clear 501, so
- * the frontend gets a legible error instead of a generic 404.
+ * does not implement yet. Each one still responds on its exact method +
+ * path, with a clear 501, so the frontend gets a legible error instead
+ * of a generic 404.
  */
-const UNIMPLEMENTED_ROUTES: readonly [string, string][] = [
-  ["POST", "/kbs/:id/mcp"],
-  ["POST", "/kbs/:id/chat"],
-  ["GET", "/kbs/:id/conversations/:conversation_id/stream"],
-  ["GET", "/kbs/:id/conversations"],
-  ["GET", "/kbs/:id/conversations/:conversation_id"],
-  ["PATCH", "/kbs/:id/conversations/:conversation_id"],
-  ["DELETE", "/kbs/:id/conversations/:conversation_id"],
-];
+const UNIMPLEMENTED_ROUTES: readonly [string, string][] = [];
 
 function registerUnimplementedRoutes(api: Hono): void {
   for (const [method, path] of UNIMPLEMENTED_ROUTES) {
@@ -107,6 +101,8 @@ export function createApp(state: AppState, opts: CreateAppOptions): Hono {
   registerSourceRoutes(api, state);
   registerGraphRoutes(api, state);
   registerReviewRoutes(api, state);
+  registerChatRoutes(api, state);
+  registerMcpRoutes(api, state);
 
   // P0 queue-validation endpoint: queues a noop job.
   api.post("/jobs/noop", async (c) => {
