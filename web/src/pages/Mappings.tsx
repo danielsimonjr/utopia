@@ -1,11 +1,15 @@
-// 数据映射：业务概念在数据库里对应什么、怎么算。
+// Data mappings: what a business concept corresponds to in the database, and how to compute it.
 //
-// **这一页在此之前不存在**，而它管的东西一直都在：口径由探查任务提出、在
-// 「审阅」里被确认，然后沉进问数的 system prompt——人再也看不见它，也改不动。
-// `mappings::revise` 连同它的留痕表从建表起就是零调用的。
+// **This page did not exist before**, but the data it manages always
+// existed: a discovery job proposes a mapping, the review page confirms
+// it, and it then sinks into the Ask system prompt. From that point, no
+// one could see it or change it. `mappings::revise` and its revision
+// history table had zero calls since the tables were created.
 //
-// 审批留在同一个端点上（`review/mappings/{id}`，那里已经在写审计流水），
-// 搬的是界面不是逻辑：判断一条口径对不对要看得见表结构，而那在这一页。
+// Approval still happens on the same endpoint, `review/mappings/{id}`,
+// which already writes to the audit log. This change moves the UI, not
+// the logic: judging whether a mapping is correct requires seeing the
+// table structure, and that view lives on this page.
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Database, History, Pencil, Plus } from "lucide-react";
@@ -36,8 +40,9 @@ const TONE: Record<string, ChipTone> = {
   rejected: "neutral",
 };
 
-/** 「这个数怎么算」。SQL / 表达式 / 表名按这个优先级取一个——
- *  三者都在回答同一个问题，而 SQL 最具体、表名最粗 */
+/** "How to compute this number." This picks one of SQL, expression, or
+ *  table name, in that priority order. All three answer the same
+ *  question; SQL is the most specific, and the table name is the coarsest. */
 const howComputed = (m: ConceptMapping) =>
   m.sql ?? m.expr ?? m.table_name ?? null;
 
@@ -92,9 +97,10 @@ export function Mappings() {
         <p className="mt-1 text-xs text-neutral-500">{S.mapping.hint}</p>
       </div>
 
-      {/* 分段控件用全站那一套（`bg-white/10` 选中 + 静默的未选中），
-          不是 `u-btn-primary`——那是主操作的实心白，用在这里每个标签都像
-          一个行动号召 */}
+      {/* This segmented control uses the site-wide pattern: `bg-white/10`
+          for the selected tab, and a muted style for the rest. It does
+          not use `u-btn-primary`, the solid white style for primary
+          actions; that style here would make every tab look like a call to action. */}
       <div className="flex w-fit rounded-lg overflow-hidden border border-white/10">
         {(["definitions", "sources"] as const).map((t) => (
           <button
@@ -199,8 +205,10 @@ export function Mappings() {
   );
 }
 
-/** 一条口径。**未表态的才给确认/拒绝两个按钮**——已表过态的给「编辑」，
- *  因为改口径和第一次拍板是两件事：前者要留痕（revisions），后者不用。 */
+/** One mapping. **Confirm and reject buttons show only for a pending
+ *  mapping.** A decided mapping shows an "edit" button instead, because
+ *  changing a mapping and deciding it for the first time are different
+ *  actions: a change must leave a revision record; the first decision does not. */
 function MappingCard({
   kbId,
   mapping: m,
@@ -396,8 +404,9 @@ function EditForm({
   );
 }
 
-/** 改版历史。**留痕表从建表起就没人读过**——0006 说留它是为了答得出
- *  「上季度这个数是怎么算的」，这里是那句话的兑现处。 */
+/** The revision history. **No one had read this table since it was
+ *  created.** ADR 0006 justified keeping it as the answer to "how was
+ *  this number computed last quarter". This view is where that promise is kept. */
 function RevisionList({
   kbId,
   mappingId,
@@ -411,8 +420,10 @@ function RevisionList({
   });
 
   if (revs.isPending) return <Loading>{S.nav.loading}</Loading>;
-  // **取失败要说取失败。** `?? []` 会把一次 500 画成「还没改过」——
-  // 一条改过口径的记录被说成从没改过，比报错难查得多
+  // **A failed fetch must show as a failure.** Falling back to `?? []`
+  // would display a 500 error as "never changed". A mapping that was
+  // actually changed would then look untouched, which is much harder to
+  // debug than a visible error.
   if (revs.isError)
     return (
       <div className="mt-3 border-t border-white/5 pt-3">
@@ -450,9 +461,12 @@ function RevisionList({
   );
 }
 
-/** 知识库层的数据源挂载。**从 KB 设置搬来的**——挂哪个库和口径怎么定，
- *  是同一件事的两半：不知道有哪些表，就判断不了口径对不对。
- *  注册新连接仍是部署级动作，管理员给直达入口，其他人指路找管理员。 */
+/** Data source mounting at the KB level. **This moved here from KB
+ *  settings.** Mounting a data source and defining a mapping are two
+ *  halves of one task: without knowing which tables exist, no one can
+ *  judge whether a mapping is correct. Registering a new connection
+ *  stays an admin-level action; admins get a direct link, and other
+ *  users see a prompt to ask an admin. */
 function DataSources({
   kbId,
   onExplored,
@@ -473,16 +487,19 @@ function DataSources({
   });
   const [picked, setPicked] = useState("");
   const [notice, setNotice] = useState<string | null>(null);
-  // 与 notice 分开：一个是「成了」，一个是「成了一半」，配色也不同
+  // This is separate from `notice`: one means "this succeeded", the other
+  // means "this partly succeeded", and each uses a different color.
   const [warning, setWarning] = useState<string | null>(null);
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["kbDataSources", kbId] });
 
   const mount = useMutation({
     mutationFn: (dsId: string) => api.mountDataSource(kbId, dsId),
-    // **挂载成了、schema 没成，是两件事。** 服务端此时回的是 ok（源确实挂上了），
-    // 所以不能照着 `schema_tables: 0` 说「已摄入 0 张表」——那等于说成功了。
-    // 说清楚半成的是哪一半，同一件事也进了告警中心
+    // **A successful mount and a successful schema sync are two separate
+    // outcomes.** The server returns `ok` here because the mount itself
+    // did succeed, so this cannot report `schema_tables: 0` as "0 tables
+    // ingested", which would sound like full success. This states which
+    // half succeeded; the same event also appears in the alert center.
     onSuccess: (r) => {
       setPicked("");
       setNotice(null);
