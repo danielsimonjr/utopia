@@ -1,0 +1,34 @@
+{
+  "name": "utopia-server",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "type": "module",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "croner": "^9.0.0",
+    "hono": "^4.7.0",
+    "jose": "^6.0.0",
+    "jszip": "^3.10.1",
+    "minisearch": "^7.1.0",
+    "n3": "^1.23.0",
+    "node-sql-parser": "^5.3.0",
+    "pdfjs-dist": "^4.10.38",
+    "postgres": "^3.4.5",
+    "sax": "^1.6.1",
+    "uuidv7": "^1.0.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@types/n3": "^1.21.0",
+    "@types/sax": "^1.2.7",
+    "bun-types": "^1.4.0",
+    "typescript": "^5.7.2"
+  }
+}

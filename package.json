@@ -1,0 +1,14 @@
+{
+  "name": "utopia",
+  "private": true,
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "workspaces": ["server", "web"],
+  "scripts": {
+    "dev": "bun run --filter utopia-server dev",
+    "start": "bun run --filter utopia-server start",
+    "test": "bun test server",
+    "typecheck": "bun run --filter utopia-server typecheck && bun run --filter utopia-web typecheck",
+    "build:web": "bun run --filter utopia-web build"
+  }
+}
