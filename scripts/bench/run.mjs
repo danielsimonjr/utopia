@@ -1,19 +1,25 @@
 #!/usr/bin/env node
-// 类型消解的测量台：**每一组一个新库**。
+// The measurement harness for type resolution: **one new KB per run.**
 //
-// 存在的理由是一次踩过的坑：连着三轮在同一个库上调检索，而那个库带着前几轮的
-// 改类结果——容易的实体早已精化，拒绝理由里写着 "already correctly typed as
-// pharmacy"。后两轮的数字跟第一轮根本不可比，我却拿它们当依据改了两次代码。
+// This rule exists because of a mistake found once: three tuning rounds ran in a row
+// against the same KB, and that KB still carried the retyping results from the
+// earlier rounds. The easy entities were already refined, and rejection reasons read
+// "already correctly typed as pharmacy". The numbers from the second and third rounds
+// were not comparable to the first round at all, and code changed twice based on
+// those numbers before this was noticed.
 //
-// 一组 = 新建知识库 → 灌固定语料 → 可选导入本体 → 跑类型消解 → 对标准答案打分。
-// 语料与标准答案都在库里（scripts/bench/），所以任何人重跑得到同一批数字。
+// One run: create a KB, load a fixed corpus, optionally import an ontology, run type
+// resolution, then score the result against the expected answers. Both the corpus and
+// the expected answers live in this repository (scripts/bench/), so anyone can rerun
+// this and get the same numbers.
 //
-// 用法：
+// Usage:
 //   node scripts/bench/run.mjs --corpus pharma --label seeds-only
 //   node scripts/bench/run.mjs --corpus pharma --ontology /tmp/schemaorg.ttl --label schemaorg
 //
-// 环境变量：BENCH_BASE（默认 http://localhost:18080）、BENCH_EMAIL / BENCH_PASSWORD、
-//           BENCH_PSQL（默认 docker exec … psql；本体段字符数要直接查库）。
+// Environment variables: BENCH_BASE (default http://localhost:18080), BENCH_EMAIL,
+// BENCH_PASSWORD, BENCH_PSQL (default runs psql through docker exec; the ontology
+// section's character count requires a direct database query).
 
 import fs from "node:fs";
 import path from "node:path";
@@ -25,16 +31,24 @@ const BASE = process.env.BENCH_BASE || "http://localhost:18080";
 const EMAIL = process.env.BENCH_EMAIL || "bench@test.local";
 const PASSWORD = process.env.BENCH_PASSWORD || "benchbench123";
 
-// 实测 4.0 字符 ≈ 1 token（377,735↔81,855、396,716↔99,041，两次都是 4.0）。
+// Measurement found roughly 4.0 characters per token (377,735 to 81,855, and 396,716
+// to 99,041; both measurements gave 4.0).
 //
-// 抽取提示词的真实 token 数拿不到——它在 LLM 客户端里，穿出来要改一路签名。
-// 本体段字符数与它稳定成比例，而这里要量的正是"本体规模"，够用且不动客户端。
+// The actual token count for the extraction prompt is not available here, because it
+// lives inside the LLM client, and exposing it would mean changing a signature all
+// the way through the call chain. The ontology section's character count stays in a
+// stable ratio to it, and character count is enough for what this measures: ontology
+// size. This avoids changing the client.
 const CHARS_PER_TOKEN = 4.0;
-// 「没动过」的样子。0009 删掉内置类之后，本体装不下的实体就停在 `type_id IS NULL`，
-// 取数时写成 `-`——**它才是判断"本不该改的有没有被改"的基准**。
+// What "untouched" looks like. After decision 0009 removed the built-in classes, an
+// entity the ontology cannot place stays at `type_id IS NULL`, and this reads it as
+// `-`. **This value is the baseline for judging "was something that should stay
+// untouched actually changed."**
 //
-// 从前这里是九个内置类名（concept/person/organization…）。那套种子已经不存在，
-// 留着它会让每一个未分类实体都被判成"被改动过"，wronglyChanged 直接虚高。
+// An earlier version of this constant held the nine built-in class names (concept,
+// person, organization, and so on). Those seed classes no longer exist. Keeping the
+// old value would have judged every unclassified entity as "changed", inflating
+// wronglyChanged.
 const UNTOUCHED = "-";
 
 const args = Object.fromEntries(
@@ -72,18 +86,23 @@ function psql(sql) {
 const num = (sql) => Number(psql(sql) || 0);
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-/// **卡住才算超时，慢不算。**
+/// **Only a stall counts as a timeout. Being slow does not.**
 ///
-/// 从前这里是「总时长上限 15 分钟」，于是 348 块的语料每次都在文档抽完之前
-/// 被判死——三组都这样，结果 JSON 一份也没拿到，而服务端其实一直跑得好好的
-///（任务在服务端排队，驱动脚本死掉不影响它们）。台子把跑成功的组报成失败，
-/// 比不报还坏。
+/// An earlier version used a fixed 15-minute total time limit. A 348-chunk corpus
+/// always got killed before document extraction finished under that limit, on all
+/// three runs, producing no result JSON at all, even though the server kept running
+/// the extraction the whole time (the tasks queue on the server, and killing the
+/// driver script does not affect them). Reporting a successful run as a failure is
+/// worse than reporting nothing.
 ///
-/// 而这个上限没法拍一个数：单块要一分钟，20 块的语料三分钟跑完，348 块要
-/// 七十五分钟，一个总时长上限伺候不了两边。所以改成看**进展**——
-/// `fn` 每次回报一个进度值，只要它在动就把闹钟往后推。
+/// A fixed limit also cannot fit both cases: one chunk takes about a minute, a
+/// 20-chunk corpus finishes in three minutes, and a 348-chunk corpus takes 75 minutes.
+/// A single total-time limit cannot serve both. So this checks **progress** instead.
+/// `fn` reports a progress value on each check, and the deadline extends forward
+/// whenever that value changes.
 ///
-/// `fn` 返回 true 表示完成；返回数字表示"还没完成，当前进度是这个"。
+/// `fn` returns true when the task is done, or a number meaning "not done yet, and
+/// this is the current progress value."
 async function until(fn, everyMs, stallMs) {
   const stall = stallMs || 900000;
   let deadline = Date.now() + stall;
@@ -96,7 +115,7 @@ async function until(fn, everyMs, stallMs) {
       deadline = Date.now() + stall;
     }
     if (Date.now() > deadline) {
-      throw new Error(`等超时：${Math.round(stall / 60000)} 分钟没有任何进展`);
+      throw new Error(`timed out: no progress for ${Math.round(stall / 60000)} minutes`);
     }
     await sleep(everyMs || 5000);
   }
@@ -106,9 +125,12 @@ async function main() {
   const corpus = JSON.parse(
     fs.readFileSync(path.join(HERE, "corpora", corpusName + ".json"), "utf8"),
   );
-  // 答案键是**可选的**。有些语料不是准确性基准：holmes 那份是 demo 空镜与
-  // 实体消解夹具，模型早就读过它，量类型准确性量到的是记忆而不是这条流水线。
-  // 没有答案键就只报规模、耗时与图的形状，不打分——比编一份假答案诚实
+  // The expected-answer key is **optional.** Some corpora are not accuracy
+  // benchmarks: the holmes corpus is a demo fixture for entity resolution, and models
+  // have already read it during training, so measuring type accuracy against it would
+  // measure memorization, not this pipeline. With no expected-answer key, this
+  // reports size, timing, and the graph's shape, and skips scoring. That is more
+  // honest than inventing a fake answer key.
   const truthPath = path.join(HERE, "truth", corpusName + ".json");
   const truth = fs.existsSync(truthPath)
     ? JSON.parse(fs.readFileSync(truthPath, "utf8")).expect
@@ -121,47 +143,61 @@ async function main() {
       password: PASSWORD,
     });
   } catch {
-    // 已经注册过，走登录
+    // Already registered; log in instead.
   }
   await api("POST", "/api/v1/auth/login", { email: EMAIL, password: PASSWORD });
   psql("UPDATE users SET is_admin=TRUE WHERE email='" + EMAIL + "'");
   await api("POST", "/api/v1/auth/login", { email: EMAIL, password: PASSWORD });
 
   const ws = (await api("GET", "/api/v1/workspaces"))[0].id;
-  // **每组一个新库**：这一条是整个脚本存在的理由，别为了省几分钟去复用
+  // **One new KB per run.** This rule is the entire reason this script exists.
+  // Do not reuse a KB to save a few minutes.
   const stamp = new Date().toISOString().replace(/[:.]/g, "-");
   const kb = (
     await api("POST", "/api/v1/workspaces/" + ws + "/kbs", {
       name: "bench " + label + " " + stamp,
-      // --packs schema-org,prov-o：走**产品实际的冷启动路径**（建库当场装包）。
-      // 与 --ontology 不是一回事：那个是建完库再导一个文件，只量得到提示词开销
+      // --packs schema-org,prov-o follows **the product's actual cold-start path**
+      // (packs install at KB creation time). This differs from --ontology, which
+      // imports a file after the KB already exists, and which only measures prompt
+      // overhead.
       ontology_packs: args.packs ? args.packs.split(",").map((x) => x.trim()) : [],
     })
   ).id;
-  // **自动扩本体默认关掉**：它会在测量中途改本体，那样两组比的就不是同一件事了。
+  // **Ontology auto-extension is off by default,** because it would change the
+  // ontology in the middle of a measurement, and then two runs would not be
+  // comparing the same thing.
   //
-  // 但关掉它也就意味着**冷启动从来没被量过**——新建的库只有 10 个默认关系，
-  // 产品的答案是抽取完自动补本体（bootstrap_ontology，列默认值 true），
-  // 而这里一律 FALSE，于是台子报出来的 related_to 占比一直是「机制被关掉之后」
-  // 的数字。拿它去说产品冷启动有多糟，是拿自己的开关当结论。
+  // But turning it off also means **cold start is never measured here.** A new KB
+  // starts with only 10 built-in relations, and the product's real answer to that is
+  // auto-extending the ontology after extraction (the bootstrap_ontology column
+  // defaults to true). This script always sets it FALSE, so the related_to
+  // proportion this harness reports is always the number "after that mechanism is
+  // turned off." Using that number to claim the product's cold start is poor would be
+  // treating this script's own setting as the conclusion.
   //
-  // 所以给它一个开关。开着跑量的是**产品的实际行为**，关着跑量的是**单一变量**，
-  // 两者都要，别只留一个。
+  // So this exposes a flag instead. Running with the flag on measures **the
+  // product's actual behavior**; running with it off measures **one isolated
+  // variable.** Both measurements are useful; do not keep only one.
   const autoExtend = "auto-extend" in args;
   if (!autoExtend) {
     psql("UPDATE knowledge_bases SET auto_extend_ontology=FALSE WHERE id='" + kb + "'");
   }
   await sleep(6000);
 
-  // **导入与灌语料的先后次序，量的是两件不同的事。**
+  // **The order between importing the ontology and loading the corpus measures two
+  // different things.**
   //
-  // 先灌后导（默认）：抽取只看得见种子本体，大本体只作用于事后消解。
-  // 先导后灌（--ontology-first）：抽取当场就看得见大本体，量的是提示词。
+  // Load then import (the default): extraction sees only the seed ontology, and the
+  // large ontology only affects resolution afterward.
+  // Import then load (--ontology-first): extraction sees the large ontology
+  // immediately, which measures prompt effects.
   //
-  // 这条曾经害我得出一个错结论：默认次序下报了 108k 的本体段，就说"108k 的
-  // 提示词吃掉了 5 个实体"——而那一组抽取时提示词里只有 9 个种子类，两组的
-  // 抽取输入根本一样，25 vs 18 是跑次方差。所以下面两处 ontology_size 都记，
-  // 各自标明是什么时候量的。
+  // This distinction once caused a wrong conclusion. Under the default order, this
+  // script reported a 108k-character ontology section and that was read as "a 108k
+  // prompt cost 5 entities". In fact, extraction's prompt in that run held only the 9
+  // seed classes; the two runs' extraction input was identical, and the 25-versus-18
+  // difference was run-to-run variance. So this records both ontology_size values
+  // below, each labeled with when it was measured.
   const ontologyFirst = "ontology-first" in args;
 
   async function importOntology() {
