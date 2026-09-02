@@ -6,7 +6,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
-import { q, qOne, exec, type Sql } from "../core/db";
+import { q, qOne, qOpt, exec, type Sql } from "../core/db";
 import { newId, type Uuid } from "../core/ids";
 
 /** Audit event view (with the actor's display name; null after account deletion). Display only. */
@@ -198,4 +198,17 @@ export async function actionsForKb(sql: Sql, kbId: Uuid): Promise<string[]> {
     [kbId],
   );
   return rows.map((r) => r.action);
+}
+
+/** The most recent automatic ontology-extension run for a KB, if any. Read by the Ontology page's "last auto-extension" banner. */
+export async function lastBootstrapRun(sql: Sql, kbId: Uuid): Promise<{ detail: Record<string, unknown>; at: Date } | null> {
+  const row = await qOpt<{ detail: Record<string, unknown>; created_at: Date }>(
+    sql,
+    `SELECT detail, created_at FROM audit_events
+     WHERE kb_id = $1 AND action = 'ontology.bootstrapped'
+     ORDER BY id DESC LIMIT 1`,
+    [kbId],
+  );
+  if (!row) return null;
+  return { detail: row.detail, at: row.created_at };
 }

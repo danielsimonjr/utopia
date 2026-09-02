@@ -1736,6 +1736,28 @@ export async function unadopt(sql: Sql, kb_id: Uuid, batch_id: Uuid): Promise<nu
   });
 }
 
+/** Which relation type a `fact_adoptions` batch belongs to, or null when the batch id names an entity-retype batch instead (the two batch kinds share one caller-visible id space). */
+export async function predicateForBatch(sql: Sql, kb_id: Uuid, batch_id: Uuid): Promise<Uuid | null> {
+  const row = await qOpt<{ predicate_id: Uuid }>(
+    sql,
+    `SELECT predicate_id FROM fact_adoptions WHERE batch_id = $1 AND kb_id = $2 LIMIT 1`,
+    [batch_id, kb_id],
+  );
+  return row?.predicate_id ?? null;
+}
+
+/** How many of the given adoption batches still have at least one live (non-reverted) row. Used to decide whether a past auto-extension run is still worth showing — one reverted clean leaves nothing on the graph to report. */
+export async function liveAdoptionCount(sql: Sql, kb_id: Uuid, batch_ids: Uuid[]): Promise<number> {
+  if (batch_ids.length === 0) return 0;
+  const row = await qOne<{ count: string }>(
+    sql,
+    `SELECT count(*)::text AS count FROM fact_adoptions
+     WHERE kb_id = $1 AND batch_id = ANY($2) AND reverted_at IS NULL`,
+    [kb_id, batch_ids],
+  );
+  return Number(row.count);
+}
+
 export interface ProposedAttribute {
   form: string;
   fact_count: number;

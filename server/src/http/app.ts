@@ -26,94 +26,26 @@ import { registerEventRoutes } from "./routes/events";
 import { registerSearchRoutes } from "./routes/search";
 import { registerDocumentRoutes } from "./routes/documents";
 import { registerMappingRoutes } from "./routes/mappings";
+import { registerDataSourceRoutes } from "./routes/datasources";
+import { registerOntologyRoutes } from "./routes/ontology";
+import { registerSourceRoutes } from "./routes/sources";
+import { registerGraphRoutes } from "./routes/graph";
+import { registerReviewRoutes } from "./routes/review";
 
 /**
  * Routes declared in the Rust API surface (`api/mod.rs`) that this build
- * does not implement yet: chat, the entity graph, ontology editing,
- * review queues, data sources, and ingest sources. Each one still
- * responds on its exact method + path, with a clear 501, so the frontend
- * gets a legible error instead of a generic 404.
+ * does not implement yet: chat, MCP, and the agentic tool surface. Each
+ * one still responds on its exact method + path, with a clear 501, so
+ * the frontend gets a legible error instead of a generic 404.
  */
 const UNIMPLEMENTED_ROUTES: readonly [string, string][] = [
-  ["GET", "/admin/data-sources"],
-  ["POST", "/admin/data-sources"],
-  ["DELETE", "/admin/data-sources/:id"],
-  ["POST", "/admin/data-sources/:id/test"],
-  ["GET", "/admin/data-sources/:id/grants"],
-  ["PUT", "/admin/data-sources/:id/grants/:workspace_id"],
-  ["DELETE", "/admin/data-sources/:id/grants/:workspace_id"],
   ["POST", "/kbs/:id/mcp"],
-  ["GET", "/kbs/:id/data-sources"],
-  ["GET", "/kbs/:id/data-sources/available"],
-  ["PUT", "/kbs/:id/data-sources/:ds_id"],
-  ["DELETE", "/kbs/:id/data-sources/:ds_id"],
-  ["POST", "/kbs/:id/data-sources/:ds_id/sync-schema"],
-  ["POST", "/kbs/:id/data-sources/explore"],
-  ["GET", "/kbs/:id/ontology"],
-  ["POST", "/kbs/:id/ontology/type-resolution/preview"],
-  ["POST", "/kbs/:id/ontology/type-resolution"],
-  ["POST", "/kbs/:id/ontology/type-resolution/approve"],
-  ["DELETE", "/kbs/:id/ontology/type-resolution/:batch_id"],
-  ["POST", "/kbs/:id/ontology/entity-types"],
-  ["PATCH", "/kbs/:id/ontology/entity-types/:type_id"],
-  ["DELETE", "/kbs/:id/ontology/entity-types/:type_id"],
-  ["GET", "/kbs/:id/ontology/entity-types/:type_id/entities"],
-  ["POST", "/kbs/:id/ontology/relation-types"],
-  ["PATCH", "/kbs/:id/ontology/relation-types/:type_id"],
-  ["DELETE", "/kbs/:id/ontology/relation-types/:type_id"],
-  ["POST", "/kbs/:id/ontology/misses/dismiss"],
-  ["POST", "/kbs/:id/ontology/misses/restore"],
-  ["POST", "/kbs/:id/ontology/suggest"],
-  ["GET", "/kbs/:id/ontology/proposals"],
-  ["POST", "/kbs/:id/ontology/proposals"],
-  ["GET", "/kbs/:id/ontology/imports"],
-  ["POST", "/kbs/:id/ontology/imports"],
-  ["POST", "/kbs/:id/ontology/imports/preview"],
-  ["GET", "/kbs/:id/ontology/proposed-predicates"],
-  ["GET", "/kbs/:id/ontology/auto-extension"],
-  ["POST", "/kbs/:id/ontology/adopt-predicate"],
-  ["DELETE", "/kbs/:id/ontology/adopt-predicate/:batch_id"],
   ["POST", "/kbs/:id/chat"],
   ["GET", "/kbs/:id/conversations/:conversation_id/stream"],
   ["GET", "/kbs/:id/conversations"],
   ["GET", "/kbs/:id/conversations/:conversation_id"],
   ["PATCH", "/kbs/:id/conversations/:conversation_id"],
   ["DELETE", "/kbs/:id/conversations/:conversation_id"],
-  ["POST", "/documents/:id/extract"],
-  ["GET", "/kbs/:id/graph/overview"],
-  ["GET", "/kbs/:id/graph/neighborhood"],
-  ["GET", "/kbs/:id/entities"],
-  ["GET", "/kbs/:id/entities/:entity_id"],
-  ["PATCH", "/kbs/:id/entities/:entity_id"],
-  ["GET", "/kbs/:id/entities/:entity_id/history"],
-  ["GET", "/kbs/:id/facts/:fact_id/evidence"],
-  ["GET", "/kbs/:id/sources"],
-  ["POST", "/kbs/:id/sources"],
-  ["PATCH", "/kbs/:id/sources/:source_id"],
-  ["DELETE", "/kbs/:id/sources/:source_id"],
-  ["POST", "/kbs/:id/sources/:source_id/sync"],
-  ["GET", "/kbs/:id/sources/:source_id/runs"],
-  ["POST", "/kbs/:id/sources/:source_id/re-extract"],
-  ["POST", "/kbs/:id/graph/rebuild"],
-  ["POST", "/kbs/:id/sources/:source_id/missing/cleanup"],
-  ["POST", "/kbs/:id/ingest"],
-  ["POST", "/sources/:source_id/ingest"],
-  ["GET", "/kbs/:id/sources/:source_id/token"],
-  ["POST", "/kbs/:id/sources/:source_id/rotate-token"],
-  ["GET", "/kbs/:id/review"],
-  ["GET", "/kbs/:id/review/history"],
-  ["POST", "/kbs/:id/review/:review_id"],
-  ["POST", "/kbs/:id/review/mappings/:mapping_id"],
-  ["POST", "/kbs/:id/consistency/check"],
-  ["POST", "/kbs/:id/review/violations/:violation_id"],
-  ["POST", "/kbs/:id/review/defects/:defect_id"],
-  ["POST", "/kbs/:id/inference/run"],
-  ["POST", "/kbs/:id/facts/:fact_id/confirm"],
-  ["POST", "/kbs/:id/facts/:fact_id/reject"],
-  ["POST", "/kbs/:id/facts/:fact_id/close"],
-  ["POST", "/kbs/:id/merges/:merge_id/revert"],
-  ["POST", "/kbs/:id/conflicts/:conflict_id"],
-  ["POST", "/kbs/:id/entities/merge"],
 ];
 
 function registerUnimplementedRoutes(api: Hono): void {
@@ -170,6 +102,11 @@ export function createApp(state: AppState, opts: CreateAppOptions): Hono {
   registerSearchRoutes(api, state);
   registerDocumentRoutes(api, state);
   registerMappingRoutes(api, state);
+  registerDataSourceRoutes(api, state);
+  registerOntologyRoutes(api, state);
+  registerSourceRoutes(api, state);
+  registerGraphRoutes(api, state);
+  registerReviewRoutes(api, state);
 
   // P0 queue-validation endpoint: queues a noop job.
   api.post("/jobs/noop", async (c) => {
