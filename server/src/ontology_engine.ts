@@ -83,8 +83,9 @@ function resolveMapTargets(proposals: Proposals, byName: Map<string, string>, ki
  * Keeps only the proposals whose wordings truly belong to this section, and
  * strips out of `forms` any wording the other section has already claimed.
  *
- * **The server holds the判据**: whether a wording carries a literal value
- * or an entity object is written in the facts, no need to ask the model.
+ * **The server holds the deciding fact**: whether a wording carries a literal value
+ * or an entity object is written in the facts. The server does not need to ask the
+ * model.
  * Measured: the model will propose the same `founded_in` as both a
  * relation and an attribute — adopting both means the same facts get
  * claimed twice, and whichever runs first wins.

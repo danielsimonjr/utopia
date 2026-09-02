@@ -210,15 +210,18 @@ async function main() {
       path.basename(args.ontology),
     );
     await api("POST", "/api/v1/kbs/" + kb + "/ontology/imports", form, true);
-    // 类向量建完才谈得上检索。关系那一半有后台任务补，类型消解用不到。
+    // Retrieval works only after the class vectors finish. A background job fills the
+    // relation half; type resolution does not need it.
     //
-    // 一千个类的冷启动要几分钟到几十分钟——跟别的库的补齐任务抢同一个嵌入
-    // 并发信号量。所以放宽到 40 分钟，并把剩余数打到 stderr：静默地等二十
-    // 分钟，分不清是在跑还是卡死了。
+    // A cold start for 1,000 classes takes minutes to tens of minutes. It competes for
+    // the same embedding concurrency slot as fill jobs for other knowledge bases. This
+    // waits up to 40 minutes and writes the remaining count to stderr, so a silent 20
+    // minute wait does not look like a hang.
     await until(
       async () => {
-        // **两份向量都要等**（0050）。只等 `embedding` 的话，label 那份还没补完
-        // 就开跑，短说法那一路一条都检索不到——测出来的是个半成品，而且看不出来
+        // Wait for both vector columns (see ADR 0050). Waiting only on `embedding`
+        // starts too soon: the label vectors are still missing, so the short-label
+        // path finds nothing. The result would look complete but is not.
         const left = num(
           "SELECT count(*) FILTER (WHERE embedding IS NULL)" +
             " + count(*) FILTER (WHERE label_embedding IS NULL)" +
@@ -226,8 +229,9 @@ async function main() {
             kb +
             "'",
         );
-        if (left) process.stderr.write("  类向量还差 " + left + "\n");
-        // 返回剩余数当进度：它在减就说明没卡住（until 看的是"有没有动"）
+        if (left) process.stderr.write("  Class vectors remaining: " + left + "\n");
+        // Report the remaining count as progress. A falling count shows the job is not
+        // stuck (`until` checks whether the value moves).
         return left === 0 ? true : left;
       },
       10000,
@@ -272,25 +276,32 @@ async function main() {
   let importMs = 0;
   if (ontologyFirst) importMs = await importOntology();
 
-  // **抽取当时本体有多大**——这一份才是提示词看到的那个规模。
+  // **The ontology size at extraction time.** This is the size the extraction prompt
+  // actually saw.
   //
-  // 先摸一次本体：种子类是**惰性建**的（第一次读本体或抽取时才落库），
-  // 不先摸就量到导入进来那些、漏掉 9 个种子。第一版就漏了，表现是
-  // 抽取时 24 类、消解时 32 类，看着像中途有人改了本体
+  // This reads the ontology once first. Seed classes load **lazily**: the row appears
+  // only on the first read or extraction. Without this read, the count would show only
+  // the imported classes and miss the 9 seed classes. The first version of this script
+  // missed this step. The result showed 24 classes at extraction and 32 at resolution,
+  // and looked like someone changed the ontology mid-run.
   await api("GET", "/api/v1/kbs/" + kb + "/ontology");
   const atExtraction = sizeNow();
 
   const t0 = Date.now();
   for (const [filename, content, docTime] of corpus.docs) {
-    // 第三个元素是 doc_time（历史快照语料才有；旧语料只有两个元素，这里是 undefined）。
-    // 它同时进两处：抽取提示词（extraction.rs 按 %Y-%m-%d 塞进去，文内相对日期才解得开）
-    // 与 documents.doc_time（时间线按它排）。少了它，247 张快照会挤成同一刻录入
+    // The third array element is doc_time. Only the history-snapshot corpus sets it;
+    // older corpora have two elements, so doc_time is undefined here. This value feeds
+    // two places: the extraction prompt (extraction.rs inserts it as %Y-%m-%d, so the
+    // model can resolve relative dates in the text) and documents.doc_time (the
+    // timeline sorts by this field). Without it, 247 snapshots would collapse into one
+    // recorded time.
     const body = { filename, content };
     if (docTime) body.doc_time = docTime;
     await api("POST", "/api/v1/kbs/" + kb + "/ingest", body);
   }
-  // 进度按**块**数，不按文档数。文档数是个很粗的刻度：一篇 73 块的文档要跑
-  // 一个多小时，期间文档数一动不动，看着就像卡死了
+  // Progress counts **chunks**, not documents. Document count is a coarse measure: a
+  // 73-chunk document can run for over an hour while the document count stays at zero,
+  // and that looks like a hang.
   await until(async () => {
     const done = num(
       "SELECT count(*) FROM documents WHERE kb_id='" + kb + "' AND graph_status='done'",
@@ -299,25 +310,30 @@ async function main() {
     const chunks = num(
       "SELECT count(*) FROM chunks WHERE kb_id='" + kb + "' AND extracted_at IS NOT NULL",
     );
-    process.stderr.write(`  抽取 ${chunks} 块 / ${done} 篇完成\n`);
+    process.stderr.write(`  Extracted ${chunks} chunks / ${done} documents done\n`);
     return chunks;
   }, 15000);
   const extractMs = Date.now() - t0;
 
   if (!ontologyFirst) importMs = await importOntology();
 
-  // 消解时本体有多大（先灌后导时它跟抽取当时不同）
+  // The ontology size at resolution time. In the documents-first order, this differs
+  // from the size at extraction time.
   const atResolution = sizeNow();
 
   const t2 = Date.now();
   const outcome = await api("POST", "/api/v1/kbs/" + kb + "/ontology/type-resolution");
   const resolveMs = Date.now() - t2;
 
-  // 打分。**待人工的按"没改"算**——它确实还没改，算成命中就是把人的活记在机器账上。
+  // Score the run. **Entities left for human review count as unchanged.** They have
+  // not changed yet, and counting them as a hit would credit the machine for a
+  // person's future work.
   //
-  // **LEFT JOIN，且没有类时写 `-`**（0009）。内连接会让未分类实体整个不出现，
-  // 于是它们被算进 absent——"抽取压根没抽出来"——而实际是抽出来了、只是没定类。
-  // 两种失败的修法完全不同，混在一栏里这张表就白做了。
+  // **Use a LEFT JOIN, and write `-` when an entity has no class (see ADR 0009).** An
+  // inner join would drop unclassified entities entirely. They would then count as
+  // absent, as if extraction never found them, when in fact extraction found them but
+  // did not assign a class. The two failure modes need different fixes, so this table
+  // must keep them apart.
   const rows = psql(
     "SELECT e.canonical_name || '|' || coalesce(t.key, '-') FROM entities e" +
       " LEFT JOIN entity_types t ON t.id=e.type_id" +
@@ -339,8 +355,9 @@ async function main() {
   let absent = 0;
   const notes = [];
   for (const [frag, accept] of Object.entries(truth ?? {})) {
-    // 按片段匹配而不是全等：抽取给的名字每次略有出入
-    //（"星云科技" / "星云科技(上海)有限公司"），全等会把这种变化算成失败
+    // Match by fragment, not exact equality. The name extraction returns varies each
+    // run (for example, "Nebula Tech" vs. "Nebula Tech (Shanghai) Co., Ltd."), and
+    // exact matching would count this normal variation as a failure.
     const found = rows.filter(([name]) => name.includes(frag));
     if (found.length === 0) {
       absent += 1;
@@ -348,16 +365,17 @@ async function main() {
     }
     const keys = found.map((r) => r[1]);
     if (accept.length === 0) {
-      // 本体里没有对得上的类：正确行为是**不动**，动了才算错
+      // No class in the ontology fits this entity. The correct behavior is to leave it
+      // unchanged; a change here counts as an error.
       if (keys.some((k) => k !== UNTOUCHED)) {
         wronglyChanged += 1;
-        notes.push(frag + "：本不该改，却成了 " + keys.join("/"));
+        notes.push(frag + ": should stay unchanged, but became " + keys.join("/"));
       } else correctlyLeft += 1;
     } else if (keys.some((k) => accept.includes(k))) {
       hit += 1;
     } else {
       miss += 1;
-      notes.push(frag + "：期望 " + accept.join("|") + "，实得 " + keys.join("/"));
+      notes.push(frag + ": expected " + accept.join("|") + ", got " + keys.join("/"));
     }
   }
 
@@ -369,11 +387,14 @@ async function main() {
         ontology: args.ontology ? path.basename(args.ontology) : null,
         kb_id: kb,
         order: ontologyFirst ? "ontology-first" : "documents-first",
-        // 开关写进结果里而不是靠人记得——上一个没写进去的前提（本体规模是
-        // 什么时候量的）已经害我得出过一个错结论
+        // Record this setting in the result instead of relying on memory. A previous
+        // run omitted an assumption (when the ontology size was measured) and that
+        // produced a wrong conclusion.
         auto_extend_ontology: autoExtend,
-        // **两份，各自标明什么时候量的。** 只报一份就会被读成"抽取用的提示词
-        // 有这么大"，而先灌后导时抽取根本没见过它——这个误读已经发生过一次
+        // **Report both sizes, each labeled with when it was measured.** Reporting
+        // only one value invites a wrong reading, such as assuming the extraction
+        // prompt held this size when, in the documents-first order, extraction never
+        // saw it. This misreading has happened before.
         ontology_at_extraction: atExtraction,
         ontology_at_resolution: atResolution,
         graph: {
@@ -395,7 +416,7 @@ async function main() {
         },
         score: truth
           ? { hit, miss, correctlyLeft, wronglyChanged, absent, notes }
-          : "无答案键，不打分",
+          : "no answer key, not scored",
         ms: { extract: extractMs, import: importMs, resolve: resolveMs },
       },
       null,
