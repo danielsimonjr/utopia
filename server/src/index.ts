@@ -19,6 +19,10 @@ import { AppState } from "./state";
 import { generateJwtSecret } from "./auth";
 import { createApp } from "./http/app";
 import { processDocument } from "./pipeline";
+import { extractDocument } from "./extraction";
+import { syncSource } from "./ingest_sources";
+import { adjudicateEntities } from "./adjudication";
+import { runBootstrap } from "./bootstrap_ontology";
 
 // Bun loads `.env` (and `.env.local`) automatically for `bun run`/`bun
 // <file>`, matching `dotenvy::dotenv().ok()` on the Rust side — no extra

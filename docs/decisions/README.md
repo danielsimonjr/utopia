@@ -1,57 +1,52 @@
-# 决策记录
+# Decision records
 
-代码记录了**做成什么样**，git 记录了**什么时候改的**。两者都不记录**为什么这样而不是那样**，以及**哪些路走过发现是死路**。这个目录记那个。
+Code records **what we built**. Git records **when we changed it**. Neither records **why we chose this and not that**, or **which paths we tried that turned out to be dead ends**. This directory records that.
 
-判断标准：如果半年后有人（包括我们自己）看着某段代码问"当初为什么不直接……"，而答案不在代码里，那就该有一篇。
+Use this test: if someone, six months from now (possibly us), looks at a piece of code and asks "why didn't we just do it the other way," and the code cannot answer — write a decision record.
 
-## 约定
+## Conventions
 
-**文件名** `NNNN-短横线英文标题.md`，四位序号，按创建顺序递增，不留空号。序号只是稳定的引用锚点，不表示优先级。
+**File names** follow `NNNN-short-english-title.md`, with a four-digit number assigned in creation order, with no gaps. The number is a stable reference anchor. It does not signal priority.
 
-**目录扁平**。在出现第二种性质不同的文档之前，不建子目录。
+**Keep this directory flat.** Do not add subdirectories until a second, genuinely different kind of document appears.
 
-**修订就地留痕，不静默改写**。结论变了——尤其是因为查证推翻了原判断——**在原处保留「修订记录」块**写清：原本是什么、为什么错、依据什么改的。不要把错误的那版删干净。
+**Revise in place. Never silently rewrite.** When a conclusion changes — especially because further checking overturned an earlier judgment — **keep a "revision" block in the original spot**, stating clearly: what it used to say, why it was wrong, and what evidence drove the change. Do not delete the earlier, incorrect version.
 
-> 这条不是文档洁癖，是同一条产品原则。我们的账本从不原地 UPDATE 事实，纠正是插入新行 + `supersedes` 旧行，因为**认知变更本身是信息**。决策记录同理：知道"我们曾经以为 range 能立刻生效，查完发现一条都没有"，比只看到最终结论有用得多——它告诉你下次该先查什么。
+> This is not a documentation habit. It is the same product principle applied to our own writing. The ledger in this product never updates a fact in place; a correction is a new row plus a `supersedes` link to the old one, because **a change in understanding is itself information.** The same applies here: knowing "we once believed a time range would apply immediately, and later found that not one case actually did" is more useful than seeing only the final answer — it tells you what to check first next time.
 
-**结论变得太多时**，另起一篇并在旧篇顶部标 `已被 NNNN 取代`，而不是把旧篇改成新的。
+**When a conclusion changes substantially**, write a new document and mark the old one at the top as "superseded by NNNN," instead of editing the old one to look like the new one.
 
-**状态行由实现它的 PR 负责更新。** 0011、0014、0015 三篇的状态行曾落后于同一个 PR 里的代码——写记录的人和写代码的人是同一个人、同一个提交，仍然漏了。所以 PR 描述里要答一句：这个改动实现或推翻了哪篇决策记录，状态行改了没有。（2026-09-02 加，出处见 [0016](0016-close-the-open-seams-before-cutting-new-ones.md)。）
+**The status line is the responsibility of the pull request that implements it.** The status lines in 0011, 0014, and 0015 all lagged behind code shipped in the same pull request — the person who wrote the decision record and the person who wrote the code were the same person, in the same commit, and it still slipped through. So a PR description must answer one question: which decision record does this change implement or overturn, and is its status line updated? (Added 2026-09-02; see [0016](0016-close-the-open-seams-before-cutting-new-ones.md).)
 
-**行号会漂，文件名会换。** 正文里的 `file.rs:123` 是成文时的坐标，不保证仍然准确；迁移在 #130 / #131 从 53 份折成 10 份、一个域一份，所以 2026-08-31 之前写的迁移文件名都要按域重找。引用时优先写函数名、表名、常量名。
+**Line numbers drift, and file names change.** A `file.rs:123` reference in this text reflects the coordinates at the time of writing, and is not guaranteed to still be accurate. Migrations were folded in #130/#131 from 53 files down to 10, one file per domain, so any migration file name written before 2026-08-31 needs to be looked up again by domain. When citing code, prefer a function name, a table name, or a constant name over a line number.
 
-**语言**：中文，与代码注释一致（UI 与 README 保持英文）。目前的读者是维护者，不是外部贡献者；将来需要时再译。
+## Index
 
-## 索引
-
-| | 文档 | 状态 |
+| | Document | Status |
 |---|---|---|
-| 0001 | [本体导入与治理路线](0001-ontology-import-and-governance.md) | 进行中 · P0–P2c 全建成；P3 按预算落地、P3a 只能手动跑；P3b 建成但形态不同；**P4b/P4c 待做**；P5 已由 0002 落地；判据 2 被 0012 推翻一半 |
-| 0002 | [推理机](0002-reasoning-engine.md) | R0 建成（含本体自检八类）· R1 建成带开关默认关 · **R2 只一层、R3 未做** · 派生 vs 断言矛盾无信号 |
-| 0003 | [本体从语料里长出来，人站在哪一环](0003-ontology-growth-loop.md) | 已建成且仍在跑 · 起点已被 0010 与种子退场改写 · 「拒绝有记忆」被 0007 推翻重做 · 新说法提醒待做 |
-| 0004 | [语言：哪些字跟着看的人走，哪些跟着语料走](0004-language-and-localization.md) | 已建成 · L0–L3 全落地 · 界面刻意不猜浏览器语言 · 「中文内置本体」随播种退场作废 |
-| 0005 | [告警中心](0005-alert-center.md) | 已建成 · 五种告警 · 三个决定推翻两个（就地留痕）· `no_text_layer` 待接 |
-| 0006 | [本体规模与抽取提示词](0006-ontology-scale-and-the-prompt.md) | 已建成 · 「内置类恒在」换成祖先补齐 · 预算与候选数仍待测 · 外部答案键未做 |
-| 0007 | [谁来决定一个说法值不值得成为关系](0007-who-decides-what-becomes-a-relation.md) | 已建成 · 六条缺陷全修 · 起点（种子、`related_to`）已不存在 · `_by` 折叠与叙述动词待解 |
-| 0008 | [预制本体包作为冷启动](0008-ontology-packs-as-cold-start.md) | 已建成 · 五包内嵌、多选、对齐表 22 条 · 三个开放问题全开，中文标签变严重 |
-| 0009 | [「还没判出来」不该是一个类](0009-no-type-is-a-type.md) | 已实施 · `disjointWith` 落库但消解侧未消费 · `metric`/`dimension` 去处未答且有可见代价 |
-| 0010 | [「说不出是什么关系」不该是一个关系](0010-no-relation-is-no-relation.md) | 已实施 · 待做两条随 0011 完成 · 两处死代码待清 |
-| 0011 | [「怎么算」不是「有什么」](0011-a-mapping-is-not-a-fact.md) | 已实施（#126 / #140 / #148）· 证据链未做 · 多源选法未做 |
-| 0012 | [本体是一份契约，不只是一份建议](0012-the-ontology-is-a-contract-not-a-suggestion.md) | 已实施 · 违反率 57%→4%、反向 39→0 · 三条待做全未做 |
-| 0013 | [一个来源该交出它的历史，不是它的现状](0013-a-source-should-hand-over-its-history.md) | 已实施两个（GitHub / Jira）· 文档协作类未开工 |
-| 0014 | [身份跟着人，范围跟着令牌](0014-identity-from-the-person-scope-from-the-token.md) | 已实施（#180）· MCP 只读五工具 · **没有令牌界面** · 误导性的占位 crate 已删 |
-| 0015 | [记下一句话，不等于断言一个事实](0015-recording-a-sentence-is-not-asserting-a-fact.md) | 进行中 · schema 已落、**运行时零接线** · `remember` 整体停用作临时闸 |
-| 0016 | [先把开着的口子收上，再开新的](0016-close-the-open-seams-before-cutting-new-ones.md) | 规划中 · v0.1.0 之后的排期：A 收口 → B 推理机 ∥ C 尺子与本体 → D 语义层 → E 企业交付；模拟引擎后置 |
+| 0001 | [Ontology import and governance](0001-ontology-import-and-governance.md) | In progress. P0 through P2c are fully built. P3 ships by budget; P3a runs only manually. P3b is built but shaped differently than planned. P4b and P4c are still to do. P5 is delivered by 0002. Half of criterion 2 is overturned by 0012. |
+| 0002 | [Reasoning engine](0002-reasoning-engine.md) | R0 is built, including the 8 ontology self-check types. R1 is built, behind a switch, off by default. **R2 has only one layer; R3 is not built.** No signal exists yet for a derived-vs-asserted contradiction. |
+| 0003 | [The ontology grows from the corpus: where the human sits](0003-ontology-growth-loop.md) | Built and still running. Its starting point is rewritten by 0010 (removing `related_to`) and by seed retirement. "Rejection has memory" was overturned and rebuilt by 0007. An alert for new phrasings is still to do. |
+| 0004 | [Language: what follows the reader, what follows the source text](0004-language-and-localization.md) | Built. L0 through L3 are all live. The UI deliberately does not guess the browser language. "A built-in Chinese ontology" is obsolete, retired along with seeding. |
+| 0005 | [Alert center](0005-alert-center.md) | Built. Five alert types. Two of the original three decisions were overturned, with the revision kept in place. `no_text_layer` is still not wired up. |
+| 0006 | [Ontology scale and the extraction prompt](0006-ontology-scale-and-the-prompt.md) | Built. "Seed types always present" was replaced by ancestor backfill. The budget and candidate-count numbers are still not properly measured. No external answer key exists yet. |
+| 0007 | [Who decides a phrase deserves to become a relation](0007-who-decides-what-becomes-a-relation.md) | Built. All six defects are fixed. The starting point (seed relations, the `related_to` share) no longer exists. `_by` folding and narrative verbs are still open. |
+| 0008 | [Ontology packs as cold start](0008-ontology-packs-as-cold-start.md) | Built. Five packs are embedded, multi-selectable, with a 22-row alignment table. All three open questions are still open, and the Chinese-labels one has gotten worse. |
+| 0009 | ["Not yet classified" should not be a type](0009-no-type-is-a-type.md) | Implemented. `disjointWith` is stored but resolution does not yet read it. Where `metric` and `dimension` belong is unanswered and now has a visible cost. |
+| 0010 | ["Cannot state a relation" should not be a relation](0010-no-relation-is-no-relation.md) | Implemented. Both "to do" items are complete, delivered together with 0011. |
+| 0011 | ["How to compute it" is not "what exists"](0011-a-mapping-is-not-a-fact.md) | Implemented (#126, #140, #148). The evidence chain is not built. A rule for multiple sources per concept is not built. |
+| 0012 | [The ontology is a contract, not a suggestion](0012-the-ontology-is-a-contract-not-a-suggestion.md) | Implemented. The violation rate fell from 57% to 4%; reversed facts fell from 39 to 0. All three "to do" items are still not done. |
+| 0013 | [A source should hand over its history, not just its current state](0013-a-source-should-hand-over-its-history.md) | Implemented for two sources (GitHub, Jira). Document-collaboration sources have not started. |
+| 0014 | [Identity comes from the person; scope comes from the token](0014-identity-from-the-person-scope-from-the-token.md) | Implemented (#180). MCP exposes five read-only tools. **There is no token UI yet.** The three placeholder crates are removed. |
+| 0015 | [Recording a sentence is not the same as asserting a fact](0015-recording-a-sentence-is-not-asserting-a-fact.md) | In progress. The schema is built; **the runtime has zero wiring.** `remember` is disabled entirely as a temporary gate. |
+| 0016 | [Close the open seams before cutting new ones](0016-close-the-open-seams-before-cutting-new-ones.md) | Planning. The schedule for the work after v0.1.0: A closes the seams, then B (finish the reasoning engine) runs alongside C (build the ruler, then tune the ontology), then D (semantic layer), then E (enterprise delivery). The simulation engine comes later. |
 
-## 不是决策记录的那些
+## What is not a decision record
 
-**[../pipeline.md](../pipeline.md) —— 一份文档如何变成图谱。** 决策记录讲「为什么这样
-而不是那样」；那一篇讲「东西怎么流的、在哪一步会被丢掉」，带五张 mermaid 图（2026-09-02 加了公理那一张）。
-新来的人先看它，再回来看这里的理由。
+**[../pipeline.md](../pipeline.md) — how a document becomes a graph.** A decision record explains "why this, not that." That document explains "how the data flows, and where it can be lost," with five mermaid diagrams (a sixth, for axioms, was added 2026-09-02). Read it first if you are new here, then come back to this directory for the reasoning behind it.
 
-这是本目录约定里说的「第二种性质不同的文档」。它没进子目录——放在 `docs/` 根上，
-`.gitignore` 里单独开口，跟 `decisions/` 并列。
+This is the "second, genuinely different kind of document" mentioned in the conventions above. It stays outside a subdirectory — it lives at the root of `docs/`, with its own exception carved out in `.gitignore`, alongside `decisions/`.
 
-## 不放这里的东西
+## What does not belong here
 
-`docs/` 根目录是**本地草稿区**（`.gitignore` 里 `/docs/*` 忽略，只对 `/docs/decisions/` 开口）。随手的调研笔记、临时清单、跑测试的中间产物放那儿，不入库。等某份草稿沉淀出了值得留的判断，再作为一篇决策记录搬进来。
+The root of `docs/` is a **local scratch area** (`.gitignore` excludes `/docs/*`, with an exception only for `/docs/decisions/`). Keep informal research notes, temporary lists, and test output there; do not commit them. Once a piece of scratch work produces a judgment worth keeping, turn it into a decision record and move it here.

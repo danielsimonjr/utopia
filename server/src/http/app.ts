@@ -211,7 +211,21 @@ export function createApp(state: AppState, opts: CreateAppOptions): Hono {
   const indexHtml = join(opts.webDist, "index.html");
   if (existsSync(indexHtml)) {
     app.use("*", serveStatic({ root: opts.webDist }));
-    app.get("*", serveStatic({ path: indexHtml }));
+    // Hand-rolled instead of another `serveStatic({ path: indexHtml })`:
+    // that middleware's path-join defaults to a `./`-relative root even
+    // for an absolute `path` option, which silently resolves against the
+    // process's cwd instead of `indexHtml` and 404s on every SPA route.
+    //
+    // Never swallows `/api/*` into the SPA shell: axum's nested router
+    // keeps its own 404 for an unmatched `/api/v1/...` path, it does not
+    // fall through to the outer fallback service, so an unknown API route
+    // stays a plain 404 here too.
+    app.get("*", async (c) => {
+      if (c.req.path.startsWith("/api/")) return c.notFound();
+      const file = Bun.file(indexHtml);
+      if (!(await file.exists())) return c.notFound();
+      return new Response(file, { headers: { "Content-Type": "text/html; charset=utf-8" } });
+    });
   }
 
   app.onError((err, c) => errorResponse(err, c));
