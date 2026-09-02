@@ -19,20 +19,20 @@ export * as conversations from "./conversations";
 export * as datasources from "./datasources";
 export * as documents from "./documents";
 export * as extractionDrops from "./extraction_drops";
+export * as graph from "./graph";
 export * as jobs from "./jobs";
 export * as kbs from "./kbs";
 export * as mappings from "./mappings";
 export * as members from "./members";
 export * as memory from "./memory";
 export * as modelLimits from "./model_limits";
+export * as ontology from "./ontology";
 export * as palette from "./palette";
 export * as reasoning from "./reasoning";
+export * as resolution from "./resolution";
 export * as review from "./review";
 export * as settings from "./settings";
 export * as sources from "./sources";
 export * as temporal from "./temporal";
 export * as tokens from "./tokens";
 export * as workspaces from "./workspaces";
-
-// `graph`, `ontology`, and `resolution` are ported separately and are not
-// re-exported here yet.
