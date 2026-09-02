@@ -1,170 +1,119 @@
-# 「说不出是什么关系」不该是一个关系
+# 0010 · "Cannot state a relation" should not be a relation
 
-**状态**：已实施 · `facts.predicate_id` 改为可空 · 文末两条待做已随 [0011](0011-a-mapping-is-not-a-fact.md)（#126）一并完成——`mapped_to` 不只撤出提示词，它整体退出了 `relation_types`，建库不再播种任何关系（2026-09-02 核）
+**Status**: Implemented. `facts.predicate_id` is now nullable. The two "to do" items at the end are both complete, delivered together with [0011](0011-a-mapping-is-not-a-fact.md) (#126) — `mapped_to` did not just leave the prompt, it left `relation_types` entirely, and creating a base no longer seeds any relation (checked 2026-09-02).
 
-这是 [0009](0009-no-type-is-a-type.md) 在关系侧的孪生。那一篇讲的是
-`concept`——一个"还没判出来"被写成了一个类；这一篇讲 `related_to`——
-一个"本体里没有对应关系"被写成了一个关系。
+This is the relation-side twin of [0009](0009-no-type-is-a-type.md). That document covered `concept` — "not yet classified" written as a type. This one covers `related_to` — "the ontology has no matching relation" written as a relation.
 
-## 它是控制流，不是词汇
+## It is control flow, not vocabulary
 
-`related_to` 编码的是**抽取器抽到了一条边、但本体里没有对应的关系**。
-那是一个程序状态。它却以 `builtin` 关系的身份躺在 `relation_types` 里，
-在本体页上跟 `acquired`、`works_at` 并排列着，像是有人决定过"这两个东西
-之间的关系就叫有关联"。没有人这样决定过。
+`related_to` encoded one thing: **the extractor found an edge, but the ontology had no matching relation for it.** That is a program state. Yet it sat in `relation_types` as a `builtin` relation, listed on the ontology page right next to `acquired` and `works_at`, as if someone had decided "the relationship between these two things is called related to." No one ever decided that.
 
-代价不是抽象的。删之前量过：某个 348 块的库里 533 条事实挂在它上面，
-界面上**全部显示"有关联"**四个字。而这 533 条**每一条都带着原文说法**
-（`fact_evidence.proposed_predicate`），一条不落——原意一直在库里，
-被那行假词汇盖着。
+The cost was not abstract. Measured before deletion: in one 348-chunk base, 533 facts sat on this relation, and the UI showed **all of them** as the four words "related to." Yet every one of those 533 facts **carried the original wording** (`fact_evidence.proposed_predicate`), with nothing missing — the real meaning was in the database the whole time, hidden behind that one fake word.
 
-## 删掉之后信息更多
+## Deleting it made the data more informative, not less
 
-同一份数据，读者看得见的从一个词变成五百多个词。真实语料上的验证
-（14706 条事实的库，见下）：图上 93 条边过去统统是"有关联"，
-现在各自显示 `placed_pressure_on` / `agreed_to_resign` / `countersued` /
-`revived_legal_action` / `license_from`。
+Same data, but what a reader can see went from one word to over five hundred. Verified on real text (a 14,706-fact base, see below): 93 edges in the graph that used to all read "related to" now each show their own wording — `placed_pressure_on`, `agreed_to_resign`, `countersued`, `revived_legal_action`, `license_from`.
 
-一条事实带多种说法的只占 3.0%（16/533），所以"显示哪一个"不是拦路虎：
-取出现最多的那个，出现次数相同时按字典序——与 `predicate_match::merge_key`
-挑规范 key 同一个规矩，且**确定**，于是同一条边在图上、实体面板、
-变更历史里叫同一个名字。
+Only 3.0% of facts (16/533) carry more than one wording, so "which one to display" is not a real obstacle: pick the most frequent one, breaking ties alphabetically — the same rule `predicate_match::merge_key` uses to pick a canonical key, and **deterministic**, so the same edge shows the same name in the graph, the entity panel, and change history.
 
-做成 SQL 函数 `fact_surface_predicate(uuid)` 而不是在每条读查询里塞子查询：
-读事实的路径有八条，八份同样的 SQL 迟早分叉，而分叉在这里的后果正是
-"同一条边在不同页面上叫不同的名字"。
+Built as a SQL function, `fact_surface_predicate(uuid)`, instead of a subquery repeated in every read query: there are eight separate paths that read facts, and eight copies of the same SQL will eventually drift apart — and drifting here means exactly "the same edge shows a different name on different pages."
 
-**有 420 条例外，全是历史遗留。** 5934 条兜底事实里 420 条拿不出原文说法，
-且**全部**来自 `Industry Corpus`(275) 与 `General`(145) 两个最早的库——
-那时 `add_evidence` 还没无条件记录 `proposed_predicate`。它们改完显示成空，
-但本来显示的是"有关联"，信息量同样是零，没有变糟。
+**420 rows are an exception, all from historical data.** Of 5,934 fallback facts, 420 have no recoverable original wording, and **all** of them come from the two oldest bases, `Industry Corpus` (275) and `General` (145) — from before `add_evidence` unconditionally recorded `proposed_predicate`. After the change they display as empty, but they used to display as "related to" — equally zero information either way, so nothing got worse.
 
-## 推翻了 0001 里的一句话
+## This overturns a line from 0001
 
-[0001](0001-ontology-import-and-governance.md) 第 441 行写过：
+[0001](0001-ontology-import-and-governance.md), line 441, once stated:
 
-> **`related_to` 是诚实的含糊，猜错则是自信的错误**
+> **`related_to` is an honest "we don't know"; a wrong specific guess is a confident mistake.**
 
-前半句错了，后半句仍然对。**保持"我不知道"确实比猜一个具体关系诚实**——
-这一点 0001 是对的，也是这篇没有推翻的部分。错在把这份诚实实现成了
-**本体里的一个词**。一个界面上显示为"有关联"的关系不是含糊，是一句**断言**：
-它声称这两个东西之间存在一种叫"有关联"的联系。真正诚实的表达是空——
-连同旁边那句"原文说的是 `acquired`"。
+The first half was wrong; the second half is still correct. **Staying at "we don't know" really is more honest than guessing a specific relation** — 0001 was right about that, and this document does not overturn it. The mistake was implementing that honesty as **a word in the ontology.** A relation the UI shows as "related to" is not vagueness — it is a **claim**: it states that a connection called "related to" exists between these two things. The truly honest form is empty — shown alongside the note "the source text says `acquired`."
 
-同一篇第 460 行的括号"（保留在本体中当代码层兜底）"也随之作废：
-兜底现在发生在**读的时候**，不是写的时候。
+The parenthetical in the same document, line 460 ("keep it in the ontology as a code-level fallback"), is also obsolete: the fallback now happens **at read time**, not at write time.
 
-## 二十条内连接，编译器一条都看不见
+## Twenty inner joins, invisible to the compiler
 
-`predicate_id` 改成可空之后，读路径上每一条 `JOIN relation_types`
-都变成了一个**静默的过滤器**——内连接丢掉 NULL 行不报错、不告警，
-`cargo check` 和 clippy 一个字都不说。这与 0009 的 `NULL <> uuid`
-是同一个陷阱的两副面孔：三值逻辑下"没有值"被当成"不匹配"。
+Once `predicate_id` became nullable, every `JOIN relation_types` on a read path became a **silent filter** — an inner join drops a NULL-matching row without error or warning, and `cargo check` and clippy say nothing about it. This is the same trap as `NULL <> uuid` in 0009, wearing a different face: under three-valued logic, "no value" gets treated as "no match."
 
-二十条里 **11 条改成 `LEFT JOIN` + 回落**，6 条内连接**本来就对**
-（4 条按 `r.key` 过滤，NULL 谓词本就不可能命中；2 条要读
-`functional`/`temporal`，没有谓词的事实本就不该参与时态推理）。
+Of the twenty joins, **11 needed to become `LEFT JOIN` with a fallback**, and 6 inner joins **were already correct** (4 filter by `r.key`, where a NULL predicate could never match anyway; 2 read `functional`/`temporal`, and a fact with no predicate should not take part in temporal reasoning at all).
 
-漏改的三处全部由数据库抓出来，没有一处是编译器发现的：
+The three that were missed were all caught by the database, not by the compiler:
 
-| 漏掉的 | 症状 | 谁抓到的 |
+| Missed spot | Symptom | Caught by |
 |---|---|---|
-| `document_extractions` 的 `r.label` 没包 COALESCE | 运行时解码失败 | 事后逐条核对 |
-| `entity_history` / `graph_changes` 外层 `FROM ev`（CTE）里写了 `f.id` | `missing FROM-clause entry for table "f"` | 新增的连库测试 |
-| `proposed_predicates` 去掉 `rt` 的连接后，示例子查询还引着 `rt.id` | `missing FROM-clause entry for table "rt"` | 既有的 `proposal_counts` 测试 |
+| `document_extractions`'s `r.label` had no COALESCE | Runtime decode failure | Manual line-by-line review afterward |
+| `entity_history` / `graph_changes`, the outer `FROM ev` (a CTE) referenced `f.id` | `missing FROM-clause entry for table "f"` | A new database-backed test |
+| `proposed_predicates`, after removing the `rt` join, an example subquery still referenced `rt.id` | `missing FROM-clause entry for table "rt"` | An existing `proposal_counts` test |
 
-还有两处占位符错位（去掉 `$2` 后 `$3` 没降号），也是测试抓的。
+Two placeholder-numbering mistakes (removing `$2` without renumbering `$3`) were also caught by tests.
 
-**这是"SQL 对编译器隐身"在本仓库的第 8 次。** 结论没有变，只是又贵了一次：
-碰 SQL 字符串的改动，连库测试不是加分项。
+**This is the 8th time in this codebase that "SQL is invisible to the compiler" has bitten us.** The conclusion has not changed, only gotten more expensive to relearn: any change touching a SQL string needs a database-backed test — it is not optional polish.
 
-新增 [`no_predicate_still_shows.rs`](../../crates/utopia-store/tests/no_predicate_still_shows.rs)
-守这条线：造一条没有谓词的事实，要求每条读路径都还能看见它。
-把任何一条 `LEFT JOIN relation_types` 改回 `JOIN`，它必须红——
-两个对照组都验过（改回内连接 → 断言失败；把 `ev.id` 写回 `f.id` → SQL 报错）。
+A new test, [`no_predicate_still_shows.rs`](../../crates/utopia-store/tests/no_predicate_still_shows.rs), guards this rule: it creates a fact with no predicate and requires every read path to still show it. Reverting any `LEFT JOIN relation_types` back to `JOIN` must fail this test — checked against both control cases (reverting to an inner join fails the assertion; writing `ev.id` back as `f.id` fails at the SQL level).
 
-## 界面上要看得出区别
+## The UI must show the difference
 
-一个词来自本体、还是来自原文，**读者必须能分辨**——否则等于用另一种方式
-再撒一次谎。所以行上带 `inferred` 标记：
+A reader **must be able to tell** whether a word came from the ontology or from the source text — otherwise this is just a different way of lying. So each row carries an `inferred` flag:
 
-- 图的边：本体外的关系用更淡的灰，不与词表里的关系一样重
-- 实体面板 / 文档产出：悬停说明"本体里没有这个关系，这是原文的说法"
-- 两者都拿不出的（那 420 条）：斜体显示"说不出是什么关系"，**不编一个词**
+- Graph edges: a relation outside the ontology renders in a lighter gray, visually distinct from a vocabulary relation
+- Entity panel and document output: hovering explains "this relation is not in the ontology; this is the source's own wording"
+- When neither is available (the 420 rows above): shown in italics as "no relation could be determined" — **never invented as a word**
 
-## 端到端验证
+## End-to-end verification
 
-在 `utopia` 的完整克隆上跑（14706 条事实，5934 条挂在 `related_to` 上）：
+Run on a full clone of the `utopia` base (14,706 facts, 5,934 sitting on `related_to`):
 
-| 环节 | 结果 |
+| Step | Result |
 |---|---|
-| 全新空库跑迁移 | 0052 应用成功，`related_to` 为 0 |
-| 真实数据跑迁移 | 5934 条转空，其中 5514 条取回原文说法 |
-| 图总览 | 457 条边：本体关系 364，原文说法 93，说不出 0 |
-| 实体面板（OpenAI，252 条事实） | 64 条显示原文说法，`inferred` 为真的一律 `temporal` 为空 |
-| 文档产出（509 条） | 134 条显示原文说法 |
-| 消解画像（去重页） | `offered_to_employ` / `hiring_effort` / `feared_retaliation` 等原文说法 |
-| 驳回一条无谓词事实 | 决策台账留下自包含快照 `Southeast Memphis — has_higher → risk of developing cancer` |
+| Migration on a fresh empty base | Migration 0052 applied cleanly; `related_to` count is 0 |
+| Migration on real data | 5,934 rows converted to empty; 5,514 recovered their original wording |
+| Graph overview | 457 edges: 364 ontology relations, 93 with original wording, 0 unresolvable |
+| Entity panel (OpenAI, 252 facts) | 64 show original wording; every row with `inferred = true` has an empty `temporal` field |
+| Document output (509 facts) | 134 show original wording |
+| Resolution profile (the deduplication page) | Shows original wordings such as `offered_to_employ`, `hiring_effort`, `feared_retaliation` |
+| Rejecting a fact with no predicate | The decision ledger keeps a self-contained snapshot: "Southeast Memphis — has_higher → risk of developing cancer" |
 
-最后一行是内连接**最贵**的那处：`fact_snapshot` 走内连接时返回 `None`，
-这条驳回在台账上将没有任何记录——而台账的全部意义就是事实删了它还在。
+The last row is exactly where an inner join would have cost the most: `fact_snapshot`, run as an inner join, would have returned `None`, and this rejection would have left **no record at all** in the ledger — even though the entire point of the ledger is to survive after the fact itself is gone.
 
-## 数据直接改，不做搬迁
+## Data was changed directly; no migration path was built
 
-现在库里全是测试数据，产品未发布。这句话在这里成立，
-换成用户跑了半年的库就不成立了——那时 0001 第 464 行那条
-"只对新抽取生效，存量要重建"仍然适用。
+Every base today holds only test data, since the product has not shipped yet. This reasoning holds here, but it would not hold once a user has run a base for months — at that point, the rule from 0001, line 464 ("applies only to new extraction; existing data needs a rebuild") still applies.
 
-## 顺带清掉的
+## Cleaned up along the way
 
-- `graph::FALLBACK_RELATION_KEY` 常量与两处 `FALLBACK_RELATION_MISSING` 分支
-- `extraction_drops` 里"本体里连兜底关系都没有 → 整条消失"这个掉落原因
-  （见 0001 第 99 行提到的那个坑，现在不可能再发生）
-- 代码与文档里"兜底谓词""兜底关系"的措辞
+- The `graph::FALLBACK_RELATION_KEY` constant and both `FALLBACK_RELATION_MISSING` branches
+- The `extraction_drops` discard reason for "the ontology does not even have a fallback relation, so the whole fact vanishes" (the exact trap noted in 0001, line 99, which can no longer happen)
+- The wording "fallback predicate" and "fallback relation" throughout the code and docs
 
-## 修订：删了数据，没删代码，七分钟后它长回来了
+## Revision: the data was deleted, the code was not, and it grew back seven minutes later
 
-**状态**：已实施 · 与上一节同一篇的直接后续
+**Status**: Implemented — a direct continuation of the section above, in the same document.
 
-0052 只删了 `relation_types` 里的**行**。种子关系是**代码**——`graph.rs` 的
-`DEFAULT_RELATION_TYPES` 里那一条还在，而 `ensure_default_ontology` 在建库、
-看本体页、**每次抽取**时都会跑。〔该函数连同种子表在 #128 整体退场，这类「长回来」从此不可能；`no_predicate_still_shows.rs` 里的对照组随之改写。〕账本上看得很清楚：
+Migration 0052 only deleted **rows** in `relation_types`. The seed relation was **code** — the entry in `graph.rs`'s `DEFAULT_RELATION_TYPES` was still there, and `ensure_default_ontology` ran on base creation, on viewing the ontology page, and on **every extraction.** (This function, along with the seed table, was retired entirely in #128; this kind of "grows back" case is no longer possible, and the control case in `no_predicate_still_shows.rs` was rewritten accordingly.) The ledger shows it clearly:
 
-    0052 应用于 08-30 17:54  →  全库 related_to 归零
-    bench demo-autoextend    →  08-30 18:01 又长出一条 builtin=true
+    0052 applied 08-30 17:54  →  related_to count across the whole system drops to zero
+    bench demo-autoextend    →  08-30 18:01, one row grows back with builtin=true
 
-**比"没删干净"更糟的是第二层。** 0052 同时删掉了抽取提示词里那条排除过滤，
-理由写在代码注释里："现在它连行都没有了，逃生舱和'记得别列它'这两件事一起消失。"
-前半句是错的，于是后半句造成了倒退：`related_to` 不但活着，而且**第一次被列进
-提示词给模型看**。0001 量过这件事的代价——359 次使用里 321 次是模型从清单上挑的，
-只有约 38 次是代码降级。逃生舱一旦摆上台面，模型就不再去说原文究竟说了什么。
+**A second layer made this worse than "not fully deleted."** Migration 0052 also removed the exclusion filter in the extraction prompt, reasoning in a code comment: "it has no row left anyway, so the escape hatch and 'remember not to list it' both disappear together." The first half of that reasoning was wrong, which turned the second half into a regression: `related_to` was not only still alive, it was **listed in the prompt for the model to see, for the first time ever.** 0001 already measured the cost of this — of 359 uses, 321 were chosen by the model directly from the list, and only about 38 came from a code-level downgrade. Once an escape hatch is put on the table, the model stops trying to state what the source text actually says.
 
-**教训不是"要记得改两处"，是"这两处必须同时改，只改一处比都不改更糟"。**
-删数据不删词汇 = 词汇长回来；删排除过滤不删词汇 = 把它递给模型。
+**The lesson is not "remember to change both places" — it is "these two changes must ship together; changing only one is worse than changing neither."** Deleting the data without the code means the vocabulary grows back. Deleting the exclusion filter without the vocabulary means handing it straight to the model.
 
-### 而守这条线的断言当时是空的
+### And the test guarding this had been passing on an empty case
 
-0052 里有一条自认为的对照组：
+Migration 0052 shipped with what looked like a control-case check:
 
 ```sql
 SELECT count(*) FROM relation_types WHERE key = 'related_to' AND builtin
 ```
 
-它通过了，因为**测试夹具是裸 SQL 建的库，从没调用过 `ensure_default_ontology`**——
-种子一次都没种下，断言在一片空地上成立。这是本会话第二次踩"空测试"
-（第一次是抽取守卫那条：`ctx = None` 根本到不了要守的分支）。
+It passed, because **the test fixture built its base with raw SQL and never called `ensure_default_ontology`** — the seed was never planted, so the assertion passed over empty ground. This is the second time in this project a test passed for this exact reason (the first was an extraction guard where `ctx = None` could never reach the branch it was meant to guard).
 
-现在的版本先把种子种下去再查，并且验过对照：把 `related_to` 加回种子表，测试变红。
+The current version plants the seed first, then checks, and was verified against the control case: adding `related_to` back to the seed table turns the test red.
 
-另外两个连带修掉的：全库计数的断言会被并行测试污染（改成按 kb 查），
-以及断言 panic 会跳过 teardown（改成开跑前先扫地）。
+Two related bugs were also fixed: a whole-database count assertion could be polluted by parallel tests (fixed by scoping the count to one knowledge base), and a failing assertion could skip teardown (fixed by clearing state before each run instead of relying on cleanup after).
 
-## 待做〔均已完成，见状态行〕
+## To do (all now complete, see the status line)
 
-- `mapped_to` 从抽取提示词里撤掉。它链接的是实体 → 数据源 schema（JSON 值），
-  只有 `related_to` 被排除在提示词外，于是模型在实体↔实体上用了它 41 次。
-  一行过滤的事。
-- 再进一步：`mapped_to` 根本不该在本体里，它是问数映射的内部机制，
-  与这一篇讲的是同一类错误——把控制流写成词汇。
+- Remove `mapped_to` from the extraction prompt. It links an entity to a data-source schema (a JSON value); only `related_to` was excluded from the prompt, so the model used `mapped_to` between entities 41 times. A one-line filter fixes it.
+- Further: `mapped_to` should not be in the ontology at all. It is an internal mechanism for question-to-data mapping, and belongs to the exact same class of mistake as this whole document — writing control flow as vocabulary.
 
-〔**顺带记两处死代码**（2026-09-02）：`graph.rs` 的 `confirmed_mappings()` 全仓零调用（问数改走 `mappings::confirmed`）；`confirm_fact` 里那段「同 (概念,源) 旧映射作废」的 `r.key = 'mapped_to'` 连接现在恒匹配零行。该清。〕
+(**Two pieces of dead code noted along the way (2026-09-02)**: `graph.rs`'s `confirmed_mappings()` has zero callers anywhere in the repository, since question-to-data mapping now goes through `mappings::confirmed`; and the `r.key = 'mapped_to'` join inside `confirm_fact`, meant to retire an old mapping for the same (concept, source) pair, now always matches zero rows. Both should be removed.)

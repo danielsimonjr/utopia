@@ -47,7 +47,12 @@ async function run(state: AppState, documentId: Uuid): Promise<void> {
   const textLen = [...parsed.text].length;
 
   // 2. Chunk + store.
-  const pieces = chunkText(parsed.text);
+  const pieces = chunkText(parsed.text).map((p) => ({
+    seq: p.seq,
+    text: p.text,
+    char_start: p.charStart,
+    char_end: p.charEnd,
+  }));
   const chunkPairs = await store.documents.replaceChunks(state.sql, doc.kb_id, documentId, pieces);
   const chunkCount = chunkPairs.length;
 

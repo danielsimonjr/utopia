@@ -1,35 +1,28 @@
-# 0009 · 「还没判出来」不该是一个类
+# 0009 · "Not yet classified" should not be a type
 
-- **状态**：已实施 · `entities.type_id` / `entity_retypes.from_type_id` 可空；内置九类与播种函数已连同种子关系一起退场（#110 / #125 / #128 / [0011](0011-a-mapping-is-not-a-fact.md)）；两个开放问题仍开放，第二个已有可见代价（2026-09-02 核）
-- **成文**：2026-08-30（约定见 [README](README.md)）
-- **相关**：[0008](0008-ontology-packs-as-cold-start.md) 让真词表成为可选起点，本文把内置的那套拆掉；
-  [0001](0001-ontology-import-and-governance.md) 的 IRI/key 分工是本文撞名论证的前提
+- **Status**: Implemented. `entities.type_id` and `entity_retypes.from_type_id` are nullable. The nine built-in types and the seeding function are retired, along with the seed relations (#110, #125, #128, [0011](0011-a-mapping-is-not-a-fact.md)). Both open questions are still open, and the second now has a visible cost (checked 2026-09-02).
+- **Written**: 2026-08-30 (see conventions in [README](README.md))
+- **Related**: [0008](0008-ontology-packs-as-cold-start.md) makes a real vocabulary an optional starting point; this document removes the built-in one. The IRI/key split from [0001](0001-ontology-import-and-governance.md) is the basis for the key-collision argument here.
 
-> 本篇没有 benchmark 数字。它是一次归类的更正——`concept` 一直被当成本体的一部分，
-> 而它其实是控制流的一部分。更正的依据是代码事实与一个撞名推演，都能重跑。
+> This document has no benchmark numbers. It is a correction of category — `concept` was always treated as part of the ontology, when it is actually part of control flow. The correction rests on facts in the code and a key-collision scenario, both reproducible.
 
-## 起点：内置九个类，一个都不该留
+## Starting point: nine built-in types, none of which should stay
 
-建库播种九个实体类（`graph.rs` 的 `DEFAULT_ENTITY_TYPES`）：
+Creating a base seeded nine entity types (`graph.rs`'s `DEFAULT_ENTITY_TYPES`):
 
 ```
 person  organization  project  metric  dimension  product  event  concept  location
 ```
 
-0008 论证过它们的通病——**零个带类型签名**，方向只能靠散文写。装了 schema.org 之后
-它们更是多余：`Person` / `Organization` / `Product` / `Event` / `Project` 会按 key 撞名
-被认领，等于内置那份从头到尾只是个占位。
+0008 already showed their shared flaw — **not one carries a type signature**, so direction can only be described in prose. Once schema.org is installed, they become redundant too: `Person`, `Organization`, `Product`, `Event`, and `Project` all get adopted by key collision, meaning the built-in versions were only ever placeholders.
 
-**`location` 是反例中的反例**：schema.org 里它叫 `Place`，key 对不上，于是不被认领，
-`City` / `AdministrativeArea` 挂到另建的 `place` 底下，跟 `location` 成了两棵树。
-一个我们自己起的名字，把整条地理子树割断了。
+**`location` is the counter-example that proves the point.** In schema.org this concept is named `Place`; the key does not match, so it is never adopted. `City` and `AdministrativeArea` attach instead to a separately created `place` type, forming a second tree next to `location`. A name we chose ourselves ends up splitting the whole geography subtree in two.
 
-`metric` / `dimension` 是语义层概念，schema.org 里确实没有——但代码里除测试外零引用，
-它们只是**播种的默认值**，不是机制。
+`metric` and `dimension` are semantic-layer concepts that genuinely have no counterpart in schema.org — but the code has zero references to them outside tests. They were only ever **seeded defaults**, not a mechanism.
 
-## `concept` 是控制流，不是词表
+## `concept` is control flow, not vocabulary
 
-八个是词表内容，可以换、可以不同意、可以被 schema.org 顶替。`concept` 不是：
+Eight of the nine are vocabulary content: they can change, be disagreed with, or be replaced by schema.org. `concept` is different:
 
 ```rust
 // extraction.rs
@@ -37,129 +30,88 @@ let concept_type = *type_ids.get("concept")
     .ok_or_else(|| anyhow!("Ontology missing the 'concept' type"))?;
 ```
 
-它编码的是**「抽取器抽到了东西，但本体里没有对应的类」**。这个状态在任何本体下都存在，
-跟装了 schema.org 还是 FIBO 无关。没有它，抽出来的实体只能被丢掉——而 0001 的 P1
-整节就是在修「静默丢弃」。
+It encodes one state: **"the extractor found something, but the ontology has no matching type for it."** This state exists under any ontology, regardless of whether schema.org or FIBO is installed. Without it, an extracted entity could only be discarded — and all of 0001 P1 exists to fix exactly that kind of "silent discard."
 
-它承担三件事：白名单外类型的落点（同时 `record_miss` 作为本体扩展信号）、
-类型消解的取材范围（`entities_for_type_resolution(kb, DUMPING_GROUND, …)`）、
-实体合并时的类型调和（兜底侧让位给具体侧）。
+It carries three jobs: a landing place for a type outside the vocabulary (while `record_miss` records it as an ontology-growth signal), the input scope for type resolution (`entities_for_type_resolution(kb, DUMPING_GROUND, …)`), and type reconciliation during entity merges (a fallback type steps aside for a specific one).
 
-## 决定：不是给它改名，是让它不存在
+## The decision: not renaming it, removing it entirely
 
-初稿拟保留哨兵行、改 key 为 `_unclassified`。**否掉**，但这个方案值得记下来，
-因为否掉它的理由才是本文的结论。
+The first draft proposed keeping the sentinel row and renaming its key to `_unclassified`. **Rejected** — but this alternative is worth recording, since the reason for rejecting it is the real conclusion of this document.
 
-改名方案能成立，是因为 `key_from_iri` 永远产不出前导下划线——第一个字符若非字母数字，
-`out.is_empty()` 为真，那个 `_` 不会被推入。实测：
+Renaming would have worked, because `key_from_iri` can never produce a leading underscore — if the first character is not alphanumeric, `out.is_empty()` stays true and the underscore is never pushed. Measured:
 
 ```
-skos:Concept        -> "concept"      ← 会撞
-http://x#_Concept   -> "concept"      ← 前导下划线被剥掉
+skos:Concept        -> "concept"      ← would collide
+http://x#_Concept   -> "concept"      ← the leading underscore is stripped
 http://x#__unclass  -> "unclassified"
 ```
 
-所以 `_unclassified` 是导入够不到的命名空间。**这是算法保证，不是约定。**
+So `_unclassified` sits in a namespace no import can ever reach. **This is a guarantee from the algorithm, not a convention someone has to remember.**
 
-而且不改名会出真事故：哨兵行**没有 IRI**，而导入逻辑是「占位者没有 IRI 就认领它」——
-`skos:Concept` 会**接管哨兵**。于是所有"还没判出来"的实体一夜之间变成正经的
-`skos:Concept`。不是撞名被跳过，是语义被静默改写。SKOS 不是冷门词表。
+But leaving it unrenamed would cause a real incident: the sentinel row **has no IRI**, and the import rule is "a placeholder with no IRI gets adopted." So `skos:Concept` would **take over the sentinel row**, and overnight, every "not yet classified" entity would become a proper `skos:Concept`. This is not a skipped collision — it is meaning silently rewritten. SKOS is not an obscure vocabulary.
 
-**但改名解决的只是撞名，解决不了泄漏。** 哨兵行必须从每一个消费者那里被过滤掉：
-本体页、抽取提示词、候选列表、图谱图例、导出、统计。漏掉任何一处，它就作为一个正经的类
-出现在那里，而且是静默出现。
+**But renaming only fixes the collision, not leakage.** A sentinel row must be filtered out of every single consumer: the ontology page, the extraction prompt, candidate lists, the graph legend, exports, statistics. Missing even one means it shows up there as a real type — silently.
 
-这正是本仓库反复警告的那类缺陷。`ontology_index.rs` 开篇：
+This is exactly the kind of defect this codebase repeatedly warns against. The opening comment in `ontology_index.rs` states:
 
-> **自愈，不挂钩子。**……漏挂一个钩子会悄悄烂掉，而对比原文不会。
+> **Self-heals; does not rely on a hook.** … a missed hook rots silently, while checking against the source text does not.
 
-`_unclassified` 是**用命名约定替代类型保证**：它管得住导入撞名，管不住某个 SELECT
-忘了写 `WHERE key NOT LIKE '\_%'`。
+`_unclassified` **substitutes a naming convention for a real type guarantee**: it prevents an import collision, but it cannot prevent some `SELECT` somewhere from forgetting `WHERE key NOT LIKE '\_%'`.
 
-**所以 `entities.type_id` 改为可空。** 「没有类型」就是没有类型，不用一行假类冒充。
+**So `entities.type_id` becomes nullable instead.** "No type" simply means no type, with no fake type standing in for it.
 
-初稿在这里写的是「NULL 忘不掉——SQL 与类型系统会当场让人知道」。**实现下来只对了一半，
-记在这儿因为错的那一半更要紧。**
+The first draft claimed here that "NULL cannot be forgotten — SQL and the type system will catch it immediately." **Only half of that turned out true, and the wrong half matters more.**
 
-Rust 这边全中：每把一个字段改成 `Option`，编译器就把它的每一个消费点列出来，
-一处不漏（`graph.rs` 的取节点语句、审核项两侧、裁决提示词、聊天里的实体清单）。
-漏掉一个哨兵不会有任何提示，漏掉一个 `Option` 连编译都过不去。
+On the Rust side, this held completely: turning a field into `Option` makes the compiler list every single consumer of it, with nothing missed (the node-fetching query in `graph.rs`, both sides of a review item, the adjudication prompt, the entity list shown in chat). Forgetting a sentinel gives no warning at all; forgetting an `Option` will not even compile.
 
-**SQL 这边不会。** `NULL <> uuid` 求值为 NULL 而不是 true，于是这样的条件
+**On the SQL side, it did not hold.** `NULL <> uuid` evaluates to NULL, not true, so a condition like this:
 
 ```sql
-AND type_id <> $2      -- 认领 / 改类都靠它挑出"要变的那些行"
+AND type_id <> $2      -- used by both adoption and retyping to pick "rows that need to change"
 ```
 
-**一行都选不中**，而且不报错。踩到两处，都在最主要的那条路上：`adopt_proposed_types`
-（本体长出新类之后认领等着它的实体）与 `retype_entities`（类型消解裁决落库）。
-两处的输入几乎全是 `type_id IS NULL` 的实体——功能会静默空转，测试也照样绿。
-正解是 `IS DISTINCT FROM`。同一次实测（一个 `proposed_type='vehicle'` 的未分类实体）：
-`<>` 选中 0 行，`IS DISTINCT FROM` 选中 1 行。
+**matches zero rows, silently, with no error.** This bug hit twice, both on the main path: `adopt_proposed_types` (adopting entities waiting on a newly grown type) and `retype_entities` (applying a type-resolution decision). Both queries' inputs are almost entirely `type_id IS NULL` entities — so the feature silently did nothing, while tests still passed. The fix is `IS DISTINCT FROM`. In one measured case (an unclassified entity with `proposed_type='vehicle'`): `<>` matched 0 rows; `IS DISTINCT FROM` matched 1.
 
-所以这条决定的真实代价不是「90 处引用要改」，而是**26 处 SQL 里的每一个比较都要重看一遍**：
-类型系统数得清 Rust 那 64 处，数不到 SQL 里去。
+So the real cost of this decision was not "90 references to update" — it was **re-checking every comparison inside 26 SQL statements.** The type system can count the 64 Rust references; it cannot count what is inside SQL strings.
 
-## 代价，逐条
+## The cost, itemized
 
-**90 处引用，26 处在 SQL 字符串里。** 逐个过完了，实际改动 14 个文件、
-`+316 / -369`——**删的比加的多**，因为内置那两张表（九个类与它们的中文措辞）
-连同播种循环一起没了。
+**90 references, 26 inside SQL strings.** All checked one by one; the actual change touched 14 files, `+316 / -369` — **more removed than added**, since the two built-in tables (nine types and their Chinese wording) disappeared along with the seeding loop.
 
-**两个唯一索引带 `type_id` 前缀：**
+**Two unique indexes carry a `type_id` prefix:**
 
 ```sql
 CREATE UNIQUE INDEX … ON entities (kb_id, type_id, lower(canonical_name))
   WHERE merged_into IS NULL;
 ```
 
-Postgres 里 **NULL 不等于 NULL**，所以未分类的同名实体不会被它拦住——两个都没类型的
-「张三」可以并存。
+In Postgres, **NULL is never equal to NULL**, so two unclassified entities sharing a name are not blocked by this index — two unclassified entities both named "Zhang San" can coexist.
 
-**这是要的行为，不是缺陷**：该索引本来的意图就是「同类同名允许重复」（0001 P0 论证过
-两个张伟必须能分开存放，宁分勿合）。未分类时我们对它们是不是同一个东西**知道得更少**，
-更没有理由合并。写在这里是因为半年后有人看到「未分类的同名实体可以重复」会以为是 bug。
+**This is the intended behavior, not a defect**: this index was always meant to allow duplicates of the same type and name (0001 P0 already argued two people named Zhang Wei must be storable separately — prefer separate over merged). When entities are unclassified, we **know even less** about whether they are the same thing, giving even less reason to merge them. This is recorded here because, six months from now, someone seeing "duplicate unclassified same-name entities allowed" might mistake it for a bug.
 
-**`CONFUSABLE_TYPE_KEYS` 不受影响。** 它按 key 查（`["organization","project","product"]`），
-而这些 key 装了 schema.org 之后仍然存在——只是来源从内置播种变成了词表导入。
-没装包的库里它们不存在，于是那一档永不命中，所有跨类型同名判 `Disjoint`（完全分开）。
-**那是变严不是变松**，不会造成错误合并。
+**`CONFUSABLE_TYPE_KEYS` is unaffected.** It looks up by key (`["organization","project","product"]`), and these keys still exist once schema.org is installed — only their source changed, from a built-in seed to an imported vocabulary. In a base with no pack installed, these keys do not exist, so this check never matches, and every cross-type same-name pair is judged `Disjoint` (fully separate). **That makes the check stricter, not looser**, and cannot cause a wrong merge.
 
-它的正解仍然是注释里写的那条——等 `disjointWith` 落库后改从本体读，即 0008 的 R0 第三阶段。
-本文不动它。
+The real fix is still the one noted in the code comment — read this from the ontology once `disjointWith` is stored, which is R0's third phase in 0008. This document leaves it unchanged.
 
-〔**2026-09-02**：前提已经成立，动作仍未做。`owl:disjointWith` 有表（`entity_type_disjoint`）、有导入、有编辑接口，消费者只有 R0 的本体自检；`CONFUSABLE_TYPE_KEYS` 仍是硬编码三个 key，且它上面的注释还停留在旧世界。〕
+(**2026-09-02**: the precondition now holds, but the fix is still not done. `owl:disjointWith` has a table (`entity_type_disjoint`), an importer, and an edit UI, but its only consumer is R0's ontology self-check; `CONFUSABLE_TYPE_KEYS` is still a hardcoded list of three keys, and its own comment still describes the old world.)
 
-## 空白库
+## An empty base
 
-删光之后，不选任何包的库是**真的空**：抽出来的实体 `type_id` 为 NULL，事实照常落库，
-证据链照常。之后装一个包再跑一次类型消解，实体会被重新分配——
-`entities_for_type_resolution` 本来就是取「落在兜底上的」，改成取 `type_id IS NULL` 即可。
+Once removed, a base with no pack selected is **genuinely empty**: extracted entities get `type_id = NULL`, while facts still land and evidence chains still work as before. Installing a pack later and re-running type resolution reassigns entities — `entities_for_type_resolution` already selected entities "sitting on the fallback type"; it now simply selects `type_id IS NULL` instead.
 
-**所以"先建库后建模"是受支持的路径，不是将就。**
+**So "build the base first, model it later" is a supported path, not a workaround.**
 
-〔落地时多了一列本文没写的 `entities.type_source`（extracted / human / inferred）：0009 让 `type_id IS NULL` 同时承载「还没判」和「人判了就是没有」，这一列把两者分开，也是类型消解取材的过滤条件（0001 P4a）。另有 `specific_type` 与 `proposed_type` 分列——前者是模型对这个实体的自由说法，专供类型消解。〕
+(One column not described here was added at ship time: `entities.type_source` — extracted, human, or inferred. 0009 makes `type_id IS NULL` carry two different meanings at once, "not yet judged" and "a person judged it and decided there is no type"; this column tells them apart, and also filters the input to type resolution, per 0001 P4a. `specific_type` and `proposed_type` are kept as separate columns too — the former is the model's own free-text description of the entity, used only by type resolution.)
 
-配套：schema.org 在建库对话框里默认勾选，可反选。这在 45 秒的时候不成立，
-在 0.42 秒的时候成立（导入改批量插入之后的实测）。
+Alongside this: schema.org is now checked by default in the base-creation dialog, with the option to uncheck it. This is not viable at 45 seconds per import, but it is viable at 0.42 seconds (measured after the importer switched to a batch insert).
 
-## 落地时定下的两件事
+## Two things settled at ship time
 
-**图谱怎么画它。** 取节点的语句从 `JOIN entity_types` 改成 `LEFT JOIN`——内连接会让
-未分类实体**整个从图上消失**，事实还在库里却查无此人，是最难发现的一种数据丢失。
-`key` 与 `label` 留 NULL，**颜色和形状给缺省值**（灰色圆点）：前者是身份，没有就该说没有；
-后者是画布必须拿到的东西，编不出来就没法渲染。同一处理也用在审核项两侧。
+**How the graph draws it.** The node-fetching query changed from `JOIN entity_types` to `LEFT JOIN` — an inner join would make unclassified entities **vanish from the graph entirely**, with the underlying fact still in the database but no way to find it — one of the hardest kinds of data loss to notice. `key` and `label` stay NULL; **color and shape get a default value** (a gray dot): the first pair is identity, and should say plainly when it is missing; the second pair is required for rendering, and cannot be left unresolved. The same handling applies on both sides of a review item.
 
-**给它定类不算「跨轴」。** 类型消解把「选中的类不在现类子树里」判为重新分类而非精化，
-一律进人工。未分类实体身上**没有一个抽取判断要被推翻**，第一次定类是补齐；
-若也判跨轴，删掉哨兵的代价就是每个实体都要人看一眼，整条自动化直接废掉。
-配套地 `entity_retypes.from_type_id` 改为可空——最常见的一次改类正是「从没有类到有类」，
-而那张表是撤销的唯一依据；非空的话第一次定类就写不进账，那批改动不可撤。
+**Assigning its first type does not count as "crossing a branch."** Type resolution treats "the chosen type is outside the current type's subtree" as a reclassification rather than a refinement, and always routes it to a person. An unclassified entity has **no prior extraction decision to overturn** — its first classification is filling a gap, not correcting one. If this were also flagged as crossing a branch, removing the sentinel type would cost a human review for every single entity, defeating the whole point of automation. To match this, `entity_retypes.from_type_id` also became nullable — the most common retype is exactly "from no type to a type," and that table is the only record undo relies on; if it required a non-null value, a first-time classification could never be logged, and that whole batch of changes could never be undone.
 
-## 开放问题
+## Open questions
 
-- **未分类实体的消解**：画像里没有类型这一维，`classify_type_drift` 少一个判据。
-  两个都没类型的同名实体，今天按 `Recall` 走画像相似度——够不够，没测过。
-- **`metric` / `dimension` 的去处**：语义层要用，而没有任何公开词表提供它们。
-  是让用户自己建，还是我们出一个「Utopia 语义层」包？后者会把内置本体从代码搬到包里，
-  性质完全不同——那是可选、带 IRI、可被替换的。〔**仍未答，且有了可见代价**：映射探查按 `entity_types.key IN ('metric','dimension')` 找类型，找不到就 `continue`——不装包、也没人手建这两个类的库里，探查会**静默产出零条**。〕
+- **Resolution of unclassified entities**: with no type dimension in the profile, `classify_type_drift` loses one of its signals. Two unclassified entities sharing a name today fall back to profile similarity through `Recall` — whether that is good enough has not been tested.
+- **Where `metric` and `dimension` belong**: the semantic layer needs them, and no public vocabulary supplies them. Should users build them by hand, or should we ship a "Utopia semantic layer" pack? The second option would move the built-in ontology out of the code and into a pack — a fundamentally different kind of thing: optional, carrying an IRI, and replaceable. (**Still unanswered, and now has a visible cost**: mapping exploration looks for types via `entity_types.key IN ('metric','dimension')`, and `continue`s if it finds none — in a base with no pack installed and no one having built these types by hand, exploration **silently produces zero results.**)
