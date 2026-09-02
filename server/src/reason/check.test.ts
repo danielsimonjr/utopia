@@ -83,8 +83,8 @@ describe("check", () => {
   });
 
   // A long cycle must report the whole path, not just "the first and last
-  // fact contradict". A person needs to read the path in order to know
-  // which fact to remove.
+  // fact contradict". A person needs to read the path to know which fact
+  // to remove.
   test("a long cycle reports the whole path", () => {
     const edges = [e(1, 1, 2), e(2, 2, 3), e(3, 3, 4), e(4, 4, 1)];
     const v = check(edges, withAxioms(ax({ transitive: true })));

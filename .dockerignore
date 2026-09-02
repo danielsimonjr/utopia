@@ -2,6 +2,7 @@
 # Docker daemon takes minutes. A host node_modules/ would also overwrite the one the container
 # installs, and the two are not binary-compatible when the host is Windows or macOS.
 target/
+crates/
 **/node_modules/
 .git/
 .github/

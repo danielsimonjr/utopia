@@ -470,10 +470,10 @@ function NewKbModal({
   const [restricted, setRestricted] = useState(true);
   // The schema.org pack is checked by default, and the user can uncheck
   // it (ADR 0009). After removing the built-in types, a KB with no pack
-  // selected is truly empty, and an empty KB still works. Most users,
-  // however, want a starting point that already recognizes people,
-  // organizations, and products. This installs in about one second (the
-  // batch insert from ADR 0008), so it is affordable as the default.
+  // selected is truly empty, and an empty KB still works. Most users want
+  // a starting point that already recognizes people, organizations, and
+  // products. This installs in about one second (the batch insert from
+  // ADR 0008), so it is affordable as the default.
   const [packs, setPacks] = useState<string[]>(["schema-org"]);
 
   const available = useQuery({

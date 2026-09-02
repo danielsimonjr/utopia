@@ -3,7 +3,7 @@
  *
  * Boot order: load config -> migrate -> open the full-text index -> resolve
  * the JWT secret -> build state -> start the job worker and schedulers ->
- * serve HTTP. This mirrors `crates/utopia-server/src/main.rs`.
+ * serve HTTP.
  */
 
 import { existsSync } from "node:fs";
@@ -25,15 +25,13 @@ import { adjudicateEntities } from "./adjudication";
 import { refresh as refreshOntologyIndex } from "./ontology_index";
 import { bootstrapOntology } from "./bootstrap_ontology";
 
-// Bun loads `.env` (and `.env.local`) automatically for `bun run`/`bun
-// <file>`, matching `dotenvy::dotenv().ok()` on the Rust side — no extra
-// call needed here.
+// Bun loads `.env` and `.env.local` automatically.
 
-/** Walks up from `cwd` looking for the repo root (has both `migrations/` and `crates/`). Falls back to `cwd` itself — a checkout layout different from this monorepo should still boot, just needs the env vars set explicitly. */
+/** Walk up from `cwd` to find the repo root. The root has `migrations/` and `server/`. If the layout differs, the process still starts. Set the environment variables in that case. */
 function findRepoRoot(): string {
   let dir = process.cwd();
   for (let i = 0; i < 8; i++) {
-    if (existsSync(join(dir, "migrations")) && existsSync(join(dir, "crates"))) {
+    if (existsSync(join(dir, "migrations")) && existsSync(join(dir, "server"))) {
       return dir;
     }
     const parent = dirname(dir);

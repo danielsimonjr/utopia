@@ -1,11 +1,9 @@
-/target
-**/*.rs.bk
 .env
 node_modules/
 web/dist/
 *.log
 .DS_Store
-# Runtime output: uploaded source files plus the Tantivy index. **This line has no leading
+# Runtime output: uploaded source files plus the search index. **This line has no leading
 # slash.** A leading slash on `/data` would match only the repository root, but the server
 # creates a `data/` directory wherever it starts. Without the leading slash, this line also
 # ignores `web/data`, which leaked into a past commit with 30 files, including two uploaded test documents.

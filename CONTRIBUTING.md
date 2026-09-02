@@ -71,7 +71,7 @@ if (!url) {
 }
 ```
 
-These tests check what a type checker cannot see: a table alias inside a SQL string, how `NULL` behaves in a comparison, a row an `INNER JOIN` silently drops, or whether a recursive query visits the same ancestor twice under diamond inheritance. Type checking and linting say nothing about any of this.
+These tests check what a type checker cannot see. Examples include a table alias inside a SQL string, how `NULL` behaves in a comparison, a row an `INNER JOIN` silently drops, and whether a recursive query visits the same ancestor twice under diamond inheritance. Type checking and linting say nothing about any of this.
 
 If you changed SQL under `server/src/store/`, set the variable and run the tests again:
 
@@ -86,7 +86,7 @@ bun test
 
 **Put UI strings in i18n.** Add each string to both `web/src/i18n/en.ts` and `zh.ts`. Do not hard-code strings inside components.
 
-**Write comments that explain why.** This repository comments densely and records the traps it fell into on purpose (for example: "the first version used OR, and one large document then produced a snapshot every 6KB"). Follow this pattern. A comment that only restates what the code does will come back in review.
+**Write comments that explain why.** This repository comments densely and records traps it fell into on purpose. For example: "the first version used OR, and one large document then produced a snapshot every 6KB." Follow this pattern. A comment that only restates what the code does will come back in review.
 
 **Write one commit message per commit, in English, stating the motivation.** Keep it to one sentence, with no long body. Skim `git log` to see the style we use.
 

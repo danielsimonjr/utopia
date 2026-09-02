@@ -10,15 +10,17 @@ Use this test: if someone, six months from now (possibly us), looks at a piece o
 
 **Keep this directory flat.** Do not add subdirectories until a second, genuinely different kind of document appears.
 
-**Revise in place. Never silently rewrite.** When a conclusion changes — especially because further checking overturned an earlier judgment — **keep a "revision" block in the original spot**, stating clearly: what it used to say, why it was wrong, and what evidence drove the change. Do not delete the earlier, incorrect version.
+**Revise in place. Never silently rewrite.** When a conclusion changes, especially because further checking overturned an earlier judgment, **keep a "revision" block in the original spot.** State clearly: what the text used to say, why it was wrong, and what evidence drove the change. Do not delete the earlier, incorrect version.
 
-> This is not a documentation habit. It is the same product principle applied to our own writing. The ledger in this product never updates a fact in place; a correction is a new row plus a `supersedes` link to the old one, because **a change in understanding is itself information.** The same applies here: knowing "we once believed a time range would apply immediately, and later found that not one case actually did" is more useful than seeing only the final answer — it tells you what to check first next time.
+> This is not a documentation habit. It is the same product principle applied to our own writing. The ledger in this product never updates a fact in place. A correction is a new row plus a `supersedes` link to the old one, because **a change in understanding is itself information.** The same rule applies here. Knowing "we once believed a time range would apply immediately, and later found that not one case actually did" is more useful than seeing only the final answer. It tells you what to check first next time.
 
-**When a conclusion changes substantially**, write a new document and mark the old one at the top as "superseded by NNNN," instead of editing the old one to look like the new one.
+**When a conclusion changes substantially**, write a new document. Mark the old one at the top as "superseded by NNNN," instead of editing the old one to look like the new one.
 
-**The status line is the responsibility of the pull request that implements it.** The status lines in 0011, 0014, and 0015 all lagged behind code shipped in the same pull request — the person who wrote the decision record and the person who wrote the code were the same person, in the same commit, and it still slipped through. So a PR description must answer one question: which decision record does this change implement or overturn, and is its status line updated? (Added 2026-09-02; see [0016](0016-close-the-open-seams-before-cutting-new-ones.md).)
+**The status line is the responsibility of the pull request that implements it.** The status lines in 0011, 0014, and 0015 all lagged behind code shipped in the same pull request. The person who wrote the decision record and the person who wrote the code were the same person, in the same commit, and the lag still slipped through. So a PR description must answer one question: which decision record does this change implement or overturn, and is its status line updated? (Added 2026-09-02; see [0016](0016-close-the-open-seams-before-cutting-new-ones.md).)
 
-**Line numbers drift, and file names change.** A `file.rs:123` reference in this text reflects the coordinates at the time of writing, and is not guaranteed to still be accurate. Migrations were folded in #130/#131 from 53 files down to 10, one file per domain, so any migration file name written before 2026-08-31 needs to be looked up again by domain. When citing code, prefer a function name, a table name, or a constant name over a line number.
+**The server is TypeScript.** Implementation lives under `server/`. Older records still name Rust files. Prefer a function name, a table name, or a constant name when you cite code.
+
+**Line numbers drift, and file names change.** A `file.ts:123` reference in this text reflects the coordinates at the time of writing. It is not guaranteed to still be accurate. Pull requests #130 and #131 folded the migrations from 53 files down to 10, one file per domain. Because of this, any migration file name written before 2026-08-31 needs a fresh lookup by domain.
 
 ## Index
 
@@ -39,14 +41,14 @@ Use this test: if someone, six months from now (possibly us), looks at a piece o
 | 0013 | [A source should hand over its history, not just its current state](0013-a-source-should-hand-over-its-history.md) | Implemented for two sources (GitHub, Jira). Document-collaboration sources have not started. |
 | 0014 | [Identity comes from the person; scope comes from the token](0014-identity-from-the-person-scope-from-the-token.md) | Implemented (#180). MCP exposes five read-only tools. **There is no token UI yet.** The three placeholder crates are removed. |
 | 0015 | [Recording a sentence is not the same as asserting a fact](0015-recording-a-sentence-is-not-asserting-a-fact.md) | In progress. The schema is built; **the runtime has zero wiring.** `remember` is disabled entirely as a temporary gate. |
-| 0016 | [Close the open seams before cutting new ones](0016-close-the-open-seams-before-cutting-new-ones.md) | Planning. The schedule for the work after v0.1.0: A closes the seams, then B (finish the reasoning engine) runs alongside C (build the ruler, then tune the ontology), then D (semantic layer), then E (enterprise delivery). The simulation engine comes later. |
+| 0016 | [Close the open seams before cutting new ones](0016-close-the-open-seams-before-cutting-new-ones.md) | Planning. This sets the schedule for the work after v0.1.0. Track A closes the seams. Track B (finish the reasoning engine) then runs alongside track C (build the ruler, then tune the ontology). Track D (semantic layer) and track E (enterprise delivery) follow. The simulation engine comes later. |
 
 ## What is not a decision record
 
-**[../pipeline.md](../pipeline.md) — how a document becomes a graph.** A decision record explains "why this, not that." That document explains "how the data flows, and where it can be lost," with five mermaid diagrams (a sixth, for axioms, was added 2026-09-02). Read it first if you are new here, then come back to this directory for the reasoning behind it.
+**[../pipeline.md](../pipeline.md) — how a document becomes a graph.** A decision record explains "why this, not that." That document explains "how the data flows, and where it can be lost." It has five mermaid diagrams, plus a sixth for axioms, added 2026-09-02. Read it first if you are new here. Then come back to this directory for the reasoning behind it.
 
-This is the "second, genuinely different kind of document" mentioned in the conventions above. It stays outside a subdirectory — it lives at the root of `docs/`, with its own exception carved out in `.gitignore`, alongside `decisions/`.
+This is the "second, genuinely different kind of document" mentioned in the conventions above. It stays outside a subdirectory. It lives at the root of `docs/`, with its own exception carved out in `.gitignore`, alongside `decisions/`.
 
 ## What does not belong here
 
-The root of `docs/` is a **local scratch area** (`.gitignore` excludes `/docs/*`, with an exception only for `/docs/decisions/`). Keep informal research notes, temporary lists, and test output there; do not commit them. Once a piece of scratch work produces a judgment worth keeping, turn it into a decision record and move it here.
+The root of `docs/` is a **local scratch area** (`.gitignore` excludes `/docs/*`, with an exception only for `/docs/decisions/`). Keep informal research notes, temporary lists, and test output there. Do not commit them. Once a piece of scratch work produces a judgment worth keeping, turn it into a decision record and move it here.
