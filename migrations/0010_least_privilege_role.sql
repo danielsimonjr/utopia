@@ -1,21 +1,28 @@
--- 应用此前用数据库 owner（superuser）连库。那个身份能 DROP TRIGGER、改任何表——
--- 也就是说 0026 给台账加的不可变触发器，对拿到应用连接串的人形同虚设：
--- DISABLE TRIGGER、改记录、ENABLE TRIGGER，三条 SQL，事后毫无痕迹。
+-- Before this migration, the application connected as the database owner (a superuser).
+-- That role can run DROP TRIGGER, or change any table, so the immutability trigger
+-- migration 0026 added to the ledger meant nothing to anyone holding the application's
+-- connection string: DISABLE TRIGGER, edit the row, ENABLE TRIGGER, three statements,
+-- with no trace afterward.
 --
--- 受限角色把应用降到它真正需要的权限：业务表随便读写，台账只能写和读。
--- 于是同样那三条 SQL 第一条就报 must be owner of table。
+-- The restricted role limits the application to what it actually needs: full read and
+-- write access to business tables, and insert-and-read-only access to the ledger. With
+-- this role, the same three statements fail on the first one, with "must be owner of table."
 --
--- 这一层挡的是应用自身的 bug、SQL 注入继承的权限、以及泄漏出去的连接串
--- （日志、备份、误提交的 .env）。它挡不住能登进服务器的人——容器内 psql
--- 是 trust 认证，免密即 superuser。那个层面属于服务器访问控制，不属于这里。
+-- This layer stops application bugs, permissions inherited through SQL injection, and a
+-- leaked connection string (in a log, a backup, or a mistakenly committed .env file). It
+-- does not stop someone who can log into the server itself: psql inside the container
+-- uses trust authentication, so no password is needed to connect as superuser. That case
+-- belongs to server access control, a separate concern from this migration.
 --
--- 整段在角色不存在时跳过：既有部署不建角色、不改连接串即可照常运行。
--- ALTER DEFAULT PRIVILEGES 也必须包在里面——它在 DO 块外会因角色不存在而
--- 报错中断迁移，那将让每一个既有部署升级即失败。
+-- This whole block is skipped when the role does not exist, so an existing deployment
+-- that never creates this role, and never changes its connection string, keeps running
+-- unchanged. ALTER DEFAULT PRIVILEGES must stay inside this same check; running it
+-- outside the DO block would raise an error for a missing role and stop the migration,
+-- which would fail every existing deployment's upgrade.
 DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'utopia_app') THEN
-        RAISE NOTICE 'utopia_app 角色不存在，跳过受限权限配置（应用继续以当前身份运行）';
+        RAISE NOTICE 'Role utopia_app does not exist. Skipping restricted-role setup. The application keeps running under its current role.';
         RETURN;
     END IF;
 
@@ -24,11 +31,13 @@ BEGIN
     GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO utopia_app;
     GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO utopia_app;
 
-    -- 台账：写得进、读得到，改不动、删不掉
+    -- The ledger: this role can insert and read, but cannot update or delete rows.
     REVOKE UPDATE, DELETE, TRUNCATE ON audit_events FROM utopia_app;
 
-    -- 往后迁移新建的表/序列/函数自动授权，否则每加一张表应用就撞权限错误。
-    -- PL/pgSQL 不接受这条 utility 命令的直写形式，走 EXECUTE。
+    -- Any table, sequence, or function a later migration creates gets this same grant
+    -- automatically; without this, adding a table would break the application with a
+    -- permissions error. PL/pgSQL does not accept this utility command written directly,
+    -- so this runs through EXECUTE.
     EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public '
          || 'GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO utopia_app';
     EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public '
@@ -36,5 +45,5 @@ BEGIN
     EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA public '
          || 'GRANT EXECUTE ON FUNCTIONS TO utopia_app';
 
-    RAISE NOTICE 'utopia_app 受限权限已配置';
+    RAISE NOTICE 'Restricted permissions for utopia_app are configured.';
 END $$;
