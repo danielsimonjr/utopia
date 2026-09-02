@@ -68,7 +68,7 @@ Utopia runs as a Bun and TypeScript server plus a Postgres service. pgvector and
 
 ## Quick start
 
-Requirements: Docker, Bun 1.1+, Postgres with pgvector.
+Requirements: Docker, Bun 1.4+, Postgres with pgvector.
 
 ```bash
 # 1. Start Postgres

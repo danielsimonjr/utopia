@@ -41,7 +41,7 @@ Both branches are protected. A pull request is required. CI (the `backend` and `
 
 ## Local setup
 
-Requirements: Docker, Bun 1.1+.
+Requirements: Docker, Bun 1.4+.
 
 ```bash
 docker compose up -d db                       # Postgres with pgvector
