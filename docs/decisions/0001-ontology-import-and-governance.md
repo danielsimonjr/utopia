@@ -1,581 +1,461 @@
-# 0001 · 本体导入与治理路线
+# 0001 · Ontology import and governance
 
-- **状态**：进行中 · P0 / P1 / P2 / P2c 全部建成；P3 的「按预算切换」已落地（部署级 `ontology_prompt_budget`，缺省 24,000 字符，超了按块检索），P3a 建成但**只能手动触发**、没有类数阈值这根轴；P3b 两条腿都建成但形态与本文不同（原词落 `fact_evidence.proposed_predicate`，映射由 `predicate_match` + [0003](0003-ontology-growth-loop.md) 的采纳回路承担）；**P4a 已建成，P4b / P4c 仍待做**；**P5 已由 [0002](0002-reasoning-engine.md) 落地，`utopia-reason` 不再是空壳**；判据 2 关于「参数顺序」的那一半已被 [0012](0012-the-ontology-is-a-contract-not-a-suggestion.md) 推翻。2026-09-02 对照代码复核，修订就地
-- **成文**：2026-08-27 / 28，随调研持续修订（约定见 [README](README.md)）
+- **Status**: In progress. P0, P1, P2, and P2c are complete. P3 ("switch by budget") is live: the deployment sets `ontology_prompt_budget` (default 24,000 characters). Above the budget, the system retrieves types per chunk. P3a is live but runs only on manual trigger; it has no class-count threshold. P3b has both parts live, but in a different shape than this document describes (the surface word goes to `fact_evidence.proposed_predicate`; mapping uses `predicate_match` and the adoption loop from [0003](0003-ontology-growth-loop.md)). P4a is live. P4b and P4c are not done. P5 is live, delivered by [0002](0002-reasoning-engine.md); `utopia-reason` is no longer an empty shell. Half of criterion 2, about argument order, is overturned by [0012](0012-the-ontology-is-a-contract-not-a-suggestion.md). Reviewed against the code and revised in place on 2026-09-02.
+- **Written**: 2026-08-27/28, revised during ongoing review (see conventions in [README](README.md)).
 
-> 理由比清单重要——清单会过期，理由决定以后遇到新情况怎么判。所以本文把「贯穿性判据」放在分阶段之前，且推翻过的判断就地留痕（见 P1、P3 的修订记录）。
+The reasons matter more than the checklist. A checklist goes stale. The reasons decide how we judge the next new case. This document puts the cross-cutting criteria before the phases, and it keeps overturned judgments in place as revision notes (see P1 and P3).
 
-## 为什么是这条线
+## Why this direction
 
-产品的差异化是"时间"与"可信"，而这两样的上游都是**本体**：抽取器按本体决定抽什么、归成什么类；时态引擎按本体的 `functional` 决定什么算矛盾；消解按类型决定谁能和谁是同一个。本体不对，下游全歪，而且歪得沉默。
+The product differs on two things: time and trust. Both depend on the **ontology**. The extractor uses the ontology to decide what to extract and how to classify it. The temporal engine uses `functional` to decide what counts as a conflict. Resolution uses type to decide which entities can be the same. When the ontology is wrong, everything downstream is wrong, and wrong silently.
 
-企业已经有自己的本体（FIBO、行业标准、Protégé 自建），让他们在界面上一条条重建不现实。所以这条线的终点是：**把企业本体导进来，让抽取按他们的词汇工作，并且治理过程本身能沉淀。**
+Enterprises already have their own ontology: FIBO, an industry standard, or a custom Protégé model. Rebuilding it by hand in our UI is not realistic. So this line of work ends here: import the enterprise ontology, extract using its vocabulary, and let the governance process itself accumulate knowledge.
 
 ---
 
-## 已验证的事实（2026-08-28，真实语料测得）
+## Verified facts (2026-08-28, measured on real text)
 
-用公开企业新闻稿建了 `Industry Corpus` 库（NVIDIA 博客 18 篇 + 微软新闻室 10 篇，RSS 摄入）：
+We built an `Industry Corpus` knowledge base from public company press releases (18 NVIDIA blog posts and 10 Microsoft newsroom posts, ingested by RSS):
 
-| 指标 | 数值 |
+| Metric | Value |
 |---|---|
-| 文档 / 分块 | 28 / 181 |
-| 实体 / 事实 | 917 / 922 |
-| **实体密度** | **5.07 个 / 分块** |
-| 消解：自动合并 / 待人工 | 10 对 / 5 对 |
-| 攒批裁决任务数 | 22（处理 917 实体的消解对） |
-| 图谱总览查询 | 103 ms |
-| as-of 查询 | 107 ms |
-| 实体变更历史（NVIDIA 122 事件） | 16 ms |
-| 当前 9 类本体在提示词中的体积 | 466 字符 |
+| Documents / chunks | 28 / 181 |
+| Entities / facts | 917 / 922 |
+| **Entity density** | **5.07 per chunk** |
+| Resolution: auto-merged / pending review | 10 pairs / 5 pairs |
+| Batched adjudication tasks | 22 (covering 917 entities) |
+| Graph overview query | 103 ms |
+| As-of query | 107 ms |
+| Entity change history (NVIDIA, 122 events) | 16 ms |
+| Size of the 9 seed types in the prompt | 466 characters |
 
-**跨文档消解成立**：NVIDIA 聚合了 16 篇文档的 118 条事实，没有裂成同名副本。
+**Cross-document resolution works.** NVIDIA merged facts from 16 documents into one entity, with 118 facts total. It did not split into duplicate entities with the same name.
 
-**已修的三个缺陷**（分支见文末）：
+**Three defects fixed** (see branch history):
 
-1. HTTP 客户端不发 User-Agent → 维基百科等站点 403，URL/RSS 对一大片真实网站直接失效
-2. HTML 提取全文档遍历 → 一篇维基条目 60 个分块，首块整块是侧栏菜单、末块是版权声明
-3. `part_of` 被标成 `functional` → 28 篇新闻稿积压 59 条假冲突（"属于 Microsoft Learn"与"属于 Microsoft"并存不是矛盾）
+1. The HTTP client sent no User-Agent, so sites like Wikipedia returned 403. This broke URL and RSS ingestion for many real sites.
+2. HTML extraction walked the whole document. A Wikipedia article split into 60 chunks; the first chunk was the sidebar menu and the last was the copyright notice.
+3. `part_of` was marked `functional`. Across 28 press releases this created 59 false conflicts (belonging to "Microsoft Learn" and to "Microsoft" is not a contradiction).
 
-**未解决的质量问题**：Product 类占 40%（368 个），抽样约四分之一是泛化短语（"row power center"、"financial databases"）。补救手段是给类写描述（description 进抽取提示词）。
+**Open quality problem**: the Product type holds 40% of entities (368). About a quarter of a sample are generic phrases ("row power center", "financial databases"). The fix is to add descriptions to types, since descriptions feed the extraction prompt.
 
-> **原文这里写「目前只能整库重抽，因为实体不可单独编辑」——P0 建成后不再成立。**
-> 今天有三条更细的路：实体面板直改（受 P4a 的 `type_source` 保护）、类型消解批量精化、
-> 本体长出新类后的 `adopt_proposed_types` 认领。整库重抽不再是唯一手段。
+> The original note here said "today the only fix is to re-extract the whole base, because entities cannot be edited alone." This is no longer true after P0. Three finer paths exist today: direct edits in the entity panel (protected by the P4a `type_source` field), batch refinement through type resolution, and `adopt_proposed_types` when the ontology grows a new type. Re-extracting the whole base is no longer the only option.
 
 ---
 
-## 贯穿性判据
+## Cross-cutting criteria
 
-以后遇到新构造、新特性，用这几条判，不要重新辩论：
+Use these criteria to judge new designs and new features. Do not re-argue them each time.
 
-1. **不是"OWL 有没有"，是"我们有没有机器消费它"**——但要加时间维度：**丢弃不可逆，保存近乎免费**。所以原文一律保真，投影只覆盖当下用得上的。推论：**保留了原文，投影就不必语义完整**——简化是 UI/提示词层的取舍，不是数据损失。
-2. **本体是引导，不是执法**。声明可能是错的（`part_of` 就是），所以本体应当影响提示词与候选排序，而不是驱动丢弃、覆盖、自动改写。错误的引导模型能靠原文覆盖；错误的执法会系统性地毁数据。
-   > **修订（2026-09-02，据 [0012](0012-the-ontology-is-a-contract-not-a-suggestion.md)）**：这条要拆成两半。**哪些类型能参与**仍是引导——本体可能写错，原文说西雅图就写西雅图。**参数顺序**改成执法：它不是关于世界的断言，是这个 key 的编码约定，原文从来没有「说了别的方向」。主语违反 domain 而宾语符合时按签名对调，留 `direction_corrected` 痕迹；对调也不合法则丢掉谓词、保留主宾与证据。留痕的自动动作不属于本条反对的那一类。实测五轮：违反率 57% → 4%，真·反向 39 → 0。
-3. **提示词大小必须与本体规模脱钩**。把 N 个类塞进每个分块的提示词，成本是 O(分块 × 本体)，而且模型从 800 个选项里挑反而更差。规模问题用检索解，不用"少列几个"解。
-4. **同名不能传递任何结论**。判定为同一实体 → 本来就一个类型，无所谓传递；判定为不同 → 名字正是我们刻意不信任的信号（两个张伟）。能携带信息的是上下文。
-5. **不确定性浮到人面前**，不要悄悄猜。分层阈值 + 灰区进 Review，与消解的"宁分勿合"同源。
-6. **治理经验固化进 schema，不要固化成隐形规则**。改一次类描述是可见、可评审、进审计台账的；从点击里长出来的自动规则半年后没人知道为什么。
-7. **唯一 ≠ 身份**。`key` 有 `UNIQUE (kb_id, key)`，但它派生自会变的东西（label / 局部名），而身份要求跨时间稳定。只要两个不同的全局事物可能想要同一个 key，key 就必须附带"来自何处"才能当标识符——那就是 IRI。另：**IRI 是名字不是地址**，绝大多数不可访问，不要去抓取，也不要把 http/https、末尾斜杠"规范化"成同一个。
-
----
-
-## 分阶段
-
-### P0 · 实体可编辑 —— 地基，且现在就在流血
-
-**问题**：实体是只读的。`/kbs/{id}/entities/{entity_id}` 只有 GET，store 层唯一的 `UPDATE entities SET type_id` 在 `resolution.rs:388`（合并时自动升格），前端面板没有任何编辑入口。类型判错、名字抽歪，只能整库重抽这把大锤。
-
-**做**
-- `PATCH /kbs/{id}/entities/{entity_id}`，Editor 权限，可改 `type_id` / `canonical_name`
-- 落审计台账：`entity.retyped` / `entity.renamed`，detail 带前后值快照（沿用决策台账的自包含快照约定）
-- 前端：实体面板头部加编辑入口
-
-> **修订记录**：初稿写「`entities` 上有唯一索引，改名会撞 409」。**两处都错**——`entities_kb_type_name_idx` 是**普通索引不是唯一索引**，而且同类同名的重复**现在就存在**（`General` 库「张伟」×2、「rust compiler」×2）。更要紧的是：不该加那个约束。
-
-**碰撞是提示，不是拒绝**：「张伟」×2 正是"宁分勿合"的设计产物——两个不同的人可以同名同类，消解的整个灰区逻辑依赖于能把他们分开存放。所以改名/改类型撞上同名时：**查出来、提示"已有同名实体，是否合并？"、但允许继续**。加唯一约束会砸掉消解的地基，报 409 会让用户无法录入第二个张伟。
-
-**动机数据**：`General` 库里跨类型同名的——"rust" **5 个**、"java" 3 个、"c++" 3 个。同一个东西被分进五个类，今天无法收拾。
-
-**验收**：能把 "row power center" 从 Product 改成 Concept，改动出现在审计台账，图谱与本体页的计数同步。
+1. **The question is not "do we have the OWL," it is "can a machine use it."** Add a time dimension: discarding data cannot be undone, but saving it is nearly free. So we keep the raw source text in full, and a projection covers only what is used today. It follows that **a projection does not need to be semantically complete once the raw text is kept**. Simplification is a UI and prompt trade-off, not data loss.
+2. **The ontology guides. It does not enforce.** A declaration can be wrong (as `part_of` was), so the ontology should shape the prompt and rank candidates. It should not drive discarding, overwriting, or silent rewriting. A wrong guide can be overridden by the source text. A wrong enforcement mechanism damages data systematically.
+   > **Revision (2026-09-02, based on [0012](0012-the-ontology-is-a-contract-not-a-suggestion.md))**: split this criterion in two. **Which types can take part** is still guidance; the ontology can be wrong, and if the source text says Seattle, we write Seattle. **Argument order** is now enforced: it is not a claim about the world, it is an encoding convention for the fact's key, and the source text never states a direction. When the subject fails the domain check but the object passes it, we swap them to match the type signature and record `direction_corrected`. If swapping still fails, we drop the predicate and keep the subject, object, and evidence. Measured over five rounds: the violation rate fell from 57% to 4%, and true reversed facts fell from 39 to 0.
+3. **Prompt size must not scale with ontology size.** Listing all N types in every chunk's prompt costs O(chunks × ontology size), and a model choosing from 800 options performs worse, not better. Solve the scale problem with retrieval, not by listing fewer types.
+4. **Matching names carries no conclusion by itself.** If two mentions resolve to the same entity, they already share a type, so no inference is needed. If they resolve to different entities, the shared name is exactly the signal we deliberately distrust (two people both named Zhang Wei). Context carries the real information.
+5. **Surface uncertainty to a person. Do not guess quietly.** Use tiered thresholds; put the gray zone in Review. This matches the "prefer separate over merged" rule in resolution.
+6. **Fix governance lessons in the schema, not as hidden rules.** Editing a type's description once is visible, reviewable, and logged in the audit trail. A rule that grows out of clicks is invisible after six months.
+7. **Uniqueness is not identity.** `key` has `UNIQUE (kb_id, key)`, but it derives from something that can change (a label or a local name), while identity must stay stable over time. If two different global things could want the same key, the key needs to carry its origin to work as an identifier. That origin is the IRI. Also: **an IRI is a name, not an address.** Most IRIs cannot be fetched. Do not crawl them, and do not "normalize" http vs. https or a trailing slash into one form.
 
 ---
 
-### P1 · 停止静默丢弃 —— 小，但现在就在流血
+## Phases
 
-> **修订记录**：这一格原本是"关系的 range 校验"，理由是"对现有语料立刻生效"。**那句是错的**——查证后：23 个关系里只有 2 个有 domain（就是那两个属性），**range 一条都没有**，因为 UI 里没有这一项、没有任何东西会写它。range 数据只可能来自 OWL 导入，所以它不可能独立于 P2 生效。range 的正确位置见 P2（导入并保存）与 P3（作为信号之一消费）。
+### P0 · Entities must be editable — the foundation, and a live problem today
 
-**真正现在就在流血的**：抽取器把事实**静默丢弃**——抽出来了、被挡掉、不留任何痕迹，用户看不见，只是图里少了东西。与"账本 append-only、每条事实都有证据、不确定性浮到人面前"三条原则直接冲突。
+**Problem**: entities are read-only. `/kbs/{id}/entities/{entity_id}` only supports GET. The one store-level `UPDATE entities SET type_id` sits in `resolution.rs:388` (an automatic upgrade during merge). The entity panel in the UI has no edit control. A wrong type or a mis-extracted name can only be fixed by re-extracting the whole base.
 
-**范围比最初判断的大**（2026-08-28 逐行核过 `extraction.rs`）。属性路径不是一个 `continue`，是四个真丢弃：
+**Do**
+- Add `PATCH /kbs/{id}/entities/{entity_id}`, requiring Editor permission, to change `type_id` and `canonical_name`.
+- Write to the audit trail: `entity.retyped` and `entity.renamed`, with a before/after snapshot in the detail field (the same self-contained snapshot convention used for the decision ledger).
+- Add an edit control to the entity panel header in the UI.
 
-| 行 | 条件 | 性质 |
+> **Revision note**: the first draft said "`entities` has a unique index, so a rename will hit a 409." Both parts were wrong. `entities_kb_type_name_idx` is a **plain index, not a unique index**, and duplicates of the same type and name **already exist** (two entities named "Zhang Wei" in the General base, two named "rust compiler").
+
+**A name collision is a hint, not a rejection.** Two "Zhang Wei" entities are a direct result of "prefer separate over merged." Two different people can share a name and a type, and resolution's whole gray-zone logic depends on storing them apart. So when a rename or retype hits a matching name: **look it up, ask "an entity with this name exists, merge it?", but allow the edit to proceed.** A unique constraint would break the foundation resolution depends on. A 409 error would block a user from ever adding a second Zhang Wei.
+
+**Supporting data**: in the General base, the name "rust" spans **5 different types**, "java" spans 3, and "c++" spans 3. The same thing is split across five types today, with no way to fix it.
+
+**Acceptance**: rename "row power center" from Product to Concept. The change appears in the audit trail. The graph view and ontology page counts update.
+
+---
+
+### P1 · Stop discarding facts silently — small, but a live problem today
+
+> **Revision note**: this item first read "validate the relation's range," reasoned as "this applies to existing text right away." That claim was wrong. On review: of 23 relations, only 2 have a domain (the same two that are attributes), and **none have a range**, because the UI has no field for it and nothing writes it. Range data can only come from an OWL import, so it cannot take effect independently of P2. The correct place for range is P2 (import and store it) and P3 (use it as one signal among several).
+
+**The real, live problem**: the extractor **silently discards facts**. It extracts a fact, blocks it, and leaves no trace. The user sees nothing; the graph is simply missing something. This conflicts directly with three principles: the ledger is append-only, every fact carries evidence, and uncertainty must surface to a person.
+
+**The scope is larger than first judged** (checked line by line in `extraction.rs` on 2026-08-28). The attribute path is not one `continue`, it is four separate discards:
+
+| Line | Condition | Nature |
 |---|---|---|
-| 255 | 主语未在 `entities` 中声明 | 真丢弃 |
-| 257 | `domain_type_id` 为 NULL | **不可达**——`ontology.rs:197` 强制 attribute 必有 domain，`update_relation_type` 又不许改 kind/domain（`ontology.rs:290`）。且无 domain 的属性连提示词都进不去（`extraction.rs:122` 的 `r.domain_type_id?`）。防御性代码，不需要信号 |
-| 261 | domain 不匹配 | 真丢弃（最初只点了这一条） |
-| 269 | 既无 `value` 也无 `object` | 真丢弃 |
-| 274 | datatype 归一化失败 | 有 `debug!` 日志，但用户不可见 |
+| 255 | Subject not declared in `entities` | Real discard |
+| 257 | `domain_type_id` is NULL | **Unreachable.** `ontology.rs:197` requires every attribute to have a domain, and `update_relation_type` blocks changes to kind or domain (`ontology.rs:290`). An attribute with no domain never reaches the prompt (`extraction.rs:122`, `r.domain_type_id?`). This is defensive code and needs no signal. |
+| 261 | Domain mismatch | Real discard (the only one flagged at first) |
+| 269 | Neither `value` nor `object` given | Real discard |
+| 274 | Datatype normalization failed | Logged with `debug!`, but the user cannot see it |
 
-关系路径另有两条值得记：`confidence < 0.6`（第 234 行，设计阈值，但同样不可见——用户无从知道"抽到了但不够自信"）与 `related_to` 不在本体时**整条事实消失**（第 380 行，删掉默认关系就会踩到）。〔**后者已不可能发生**：`related_to` 整个删掉，落不上就是 `predicate_id = NULL`，见 [0010](0010-no-relation-is-no-relation.md)。〕
+The relation path has two more worth noting: `confidence < 0.6` (line 234, a deliberate threshold, but still invisible — the user has no way to know a fact was extracted but flagged low-confidence) and, when `related_to` was missing from the ontology, **the whole fact vanished** (line 380; deleting the default relation would trigger this). This second case can no longer happen: `related_to` was removed entirely, so a missing predicate now results in `predicate_id = NULL` (see [0010](0010-no-relation-is-no-relation.md)).
 
-**顺带发现一个不一致**：关系路径上主宾未声明时会**兜底按 `concept` 消解**（332-362 行），属性路径上同样的缺失却直接丢（255 行）。同一个原因，一边宽容一边静默丢弃。要么两边都兜底，要么两边都记信号——不能一边一个样。〔**已消除**：`concept` 兜底类随 [0009](0009-no-type-is-a-type.md) 删掉，两条路径现在都记 `subject_not_declared`。丢弃原因码今天有 12 个（`extraction_drops::reason`），含 `truncated_reply`、`malformed_item`、`not_an_entity_name`、`direction_corrected`，比本节设想的多一倍。〕
+**A related inconsistency**: on the relation path, an undeclared subject or object falls back to the `concept` type (lines 332–362). On the attribute path, the same missing case is simply discarded (line 255). Same root cause, one path tolerant, the other silently dropping facts. Either both paths should fall back, or both should log a signal — not one rule for each. **This is now fixed**: the `concept` fallback type was removed along with [0009](0009-no-type-is-a-type.md), and both paths now log `subject_not_declared`. There are 12 discard reason codes today (`extraction_drops::reason`), including `truncated_reply`, `malformed_item`, `not_an_entity_name`, and `direction_corrected` — twice as many as this section first described.
 
-**做**
-- 新表 `extraction_drops (kb_id, document_id, reason, detail, count, example, updated_at)`，PK `(kb_id, document_id, reason, detail)`，抽取开始时按 document 清空
-- 不复用 `ontology_misses`：那张表语义是"你的本体缺这些"（面向本体演进），丢弃是"这些事实没落地"（面向数据完整性），两者的读者和动作都不同
-- 按 document 归集顺带修好生命周期：`ontology_misses` 只在整库 rebuild 时清（`graph.rs:689`），来源级重抽不清，会攒陈旧条目。新表按 document 清则天然正确
+**Do**
+- Add a table `extraction_drops (kb_id, document_id, reason, detail, count, example, updated_at)`, with primary key `(kb_id, document_id, reason, detail)`. Clear it per document when extraction starts.
+- Do not reuse `ontology_misses`. That table means "your ontology is missing this" (for ontology growth). A discard means "this fact did not land" (for data completeness). Readers and actions differ for each.
+- Group discards by document. This also fixes a lifecycle bug: `ontology_misses` clears only on a full base rebuild (`graph.rs:689`). A per-source re-extract does not clear it, so stale entries build up. A table keyed by document clears correctly by design.
 
-**验收**：故意给 Person 专属属性喂一个 Organization 主语，Library 的文档行能看到"3 条事实未落地"，点开有原因与样例，事实不再无声消失。
+**Acceptance**: give a Person-only attribute an Organization subject on purpose. The document's row in the library shows "3 facts did not land." Opening it shows the reason and an example. Facts no longer disappear without a trace.
 
 ---
 
-### P2 · OWL 导入
+### P2 · OWL import
 
-**架构分三层，关键在第一层**
+**The architecture has three layers. The first layer matters most.**
 
-1. **原文保真**：导入的本体文件原样进 blob store（内容寻址那套摄入管道在用），`ontology_imports` 记录 (kb_id, blob sha, 文件名, 时间, 投影版本)。这一步不理解语义，只负责不丢。
-2. **投影**：把今天能消费的子集映射进 `entity_types` / `relation_types`。**是可重跑的推导，不是一次性转换。**
-3. **重投影**：推理机上线或我们补上新校验时重跑，用户什么都不用做。
+1. **Keep the raw source.** The imported ontology file goes into the blob store unchanged, using the same content-addressed ingest pipeline already in place. `ontology_imports` records `(kb_id, blob sha, file name, time, projection version)`. This layer does not interpret meaning; it only avoids loss.
+2. **Projection.** Map the subset we can use today into `entity_types` and `relation_types`. **This is a re-runnable derivation, not a one-time conversion.**
+3. **Re-projection.** Re-run it when the reasoning engine ships or when we add new checks. The user does nothing extra.
 
-这样"我们表达不了"从**能力缺口**降级成**投影暂未覆盖**。
+This turns "we cannot express this" from a **capability gap** into "the projection does not cover this yet."
 
-**映射表**
+**Mapping table**
 
-| OWL / RDFS | Utopia | 备注 |
+| OWL / RDFS | Utopia | Note |
 |---|---|---|
 | `owl:Class` | entity_type | |
-| `rdfs:subClassOf` | **多父**（见下） | |
-| `rdfs:label` | `label` | 优先 `@en`/`@zh` |
-| **`rdfs:comment`** | **`description`** | 承重：进抽取提示词，也是 P3 检索的匹配依据 |
+| `rdfs:subClassOf` | **multiple parents** (see below) | |
+| `rdfs:label` | `label` | Prefer `@en`/`@zh` |
+| **`rdfs:comment`** | **`description`** | Load-bearing: feeds the extraction prompt and is the match target for P3 retrieval |
 | `owl:ObjectProperty` | relation_type (`kind=relation`) | |
 | `owl:DatatypeProperty` | relation_type (`kind=attribute`) | |
-| `rdfs:domain` | `relation_type_domains`（多值关联表） | 见下"多值域" |
-| `rdfs:range` | `relation_type_ranges`（多值关联表）/ `datatype` | 同上；**只存不强制**，消费者是 P3/P5 |
-| `owl:FunctionalProperty` | `functional` | max-cardinality-1，时态引擎的命根子 |
+| `rdfs:domain` | `relation_type_domains` (a multi-value join table) | See "multi-value domain" below |
+| `rdfs:range` | `relation_type_ranges` (join table) / `datatype` | Same; **stored, not enforced**; consumed by P3/P5 |
+| `owl:FunctionalProperty` | `functional` | Max cardinality 1; core to the temporal engine |
 | `owl:InverseFunctionalProperty` | `inverse_functional` | |
-| IRI | 新增 `iri` 列 | 见下"IRI 与 key 的分工" |
-| 其余公理 | **保留在原文，报告为"暂未投影"** | 不是"已跳过" |
+| IRI | New `iri` column | See "IRI and key" below |
+| All other axioms | **Kept in the raw source, reported as "not yet projected"** | Not "skipped" |
 
-**IRI 与 key 的分工**：`key` 有硬约束——只允许 `[a-z0-9_]`、最长 40 字符（`ontology.rs:77`），而且它是**给模型读写的令牌**：提示词列的是 key，模型返回的 `type` 是 key，`type_ids` 按 key 查。IRI 塞不进去（冒号斜杠井号全非法），放宽约束的话提示词变成 800 行 URL，还要模型逐字复现——截断或幻觉一个字符就匹配失败。
+**IRI and key have separate jobs.** `key` has strict limits: only `[a-z0-9_]`, at most 40 characters (`ontology.rs:77`), and it is **a token the model reads and writes**: the prompt lists keys, the model returns a `type` as a key, and `type_ids` are looked up by key. An IRI does not fit here (colons, slashes, and hashes are all illegal), and loosening the rule would turn the prompt into 800 lines of URLs the model must reproduce exactly — one wrong character breaks the match.
 
-所以：**IRI 是全局身份（权威），key 是模型标签**。key 从 IRI 派生（命名空间前缀 + 局部名，snake_case，冲突加后缀），短而稳定。存储：一个可空 TEXT 列 + `UNIQUE (kb_id, iri) WHERE iri IS NOT NULL`；手工建的类为 NULL，无负担。
+So: **the IRI is the global identity (the authority); the key is the model's label.** The key derives from the IRI (a namespace prefix plus a local name, in snake_case, with a suffix on conflict), kept short and stable. Storage: a nullable TEXT column plus `UNIQUE (kb_id, iri) WHERE iri IS NOT NULL`. Manually created types keep `iri` as NULL, at no extra cost.
 
-**为什么 key 唯一了还要它**——重导入是本体功能上线就会撞到的第一件事：
+**Why keep an IRI once the key is unique**: re-importing an updated ontology is the first case that breaks a key-only design:
 
 ```
 v1: http://acme.com/hr#Employee  rdfs:label "Employee"     → key = employee
-v2: http://acme.com/hr#Employee  rdfs:label "Staff Member" → key = staff_member  ← 同一个类
+v2: http://acme.com/hr#Employee  rdfs:label "Staff Member" → key = staff_member  ← same class
 ```
 
-没有 IRI 只能二选一，都错：建新类 `staff_member` 把 `employee` 变孤儿（实体全挂在上面），或按 label 匹配（label 正是刚变的那个）。有 IRI 就是一次 `WHERE iri = $1`，改名字，实体不动。
+Without an IRI, both choices are wrong: creating a new type `staff_member` orphans `employee` (all its entities stay attached to the old type), or matching by label fails because the label is exactly what changed. With an IRI, this is one `WHERE iri = $1` query: the name changes, the entities stay put.
 
-想「那 key 就从局部名派生」也撑不住：`foaf:Person` 与 `acme:Person` 都要 `person`，谁拿 `_2` 后缀取决于导入顺序，下次重导入分不出 `person_2` 是谁的——除非记下它来自哪个 IRI，那就是 IRI 列绕一圈重新发明。另两个用途：**溯源**（上游类被手改后重导入要调和，得先知道它是上游的）与 **P5 导出**（key 反推不出命名空间，有损）。
+Deriving the key from the local name alone does not work either: `foaf:Person` and `acme:Person` both want `person`. Which one gets the `_2` suffix depends on import order, and on the next re-import we cannot tell which `person_2` belongs to which source — unless we record which IRI it came from, which reinvents the IRI column. Two more uses: **tracing origin** (reconciling an upstream type after a manual edit requires knowing it came from upstream) and **P5 export** (a key alone cannot recover the namespace; it would be lossy).
 
-**多值域（domain / range）**：OWL 里并集是常态（`works_at` 的值域可能是 `Organization ∪ Project`），单列表达不了，用关联表存，判定走子类 DAG。
+**Multi-value domain and range**: a union of domains is common in OWL (`works_at` might range over `Organization ∪ Project`), which a single column cannot express. Store it in a join table and check membership through the subclass DAG.
 
-导入的语义陷阱：RDFS 中同一属性的**多条 `rdfs:range` 是交集**（"必须同时是两者"），不是并集——极常见的建模错误，但规范如此。`owl:unionOf` → 直接进表；多条独立 `rdfs:range` → 一者是另一者的子类则取更具体的，互不包含则**报告"暂未投影"，不猜**。
+**An import trap**: in RDFS, multiple `rdfs:range` statements on the same property are an **intersection** ("must be both"), not a union. This is a common modeling mistake, but it is the spec. Treat `owl:unionOf` as a direct union in the table. For multiple independent `rdfs:range` statements, if one is a subclass of the other, keep the more specific one; if neither contains the other, **report "not yet projected" and do not guess.**
 
-**domain/range 的正确用法是提示词里的类型签名，不是闸门**
+**The correct use of domain/range is a type signature in the prompt, not a gate.**
 
-关系在提示词里从 `- works_at (works at): 描述` 变成 `- works_at (works at): Person → Organization。描述`。这是**给模型的类型签名**，在源头减少 "Alice works_at 西雅图" 这类三元组，而不是等错了再修——事后校验面对的是既成事实（丢掉可惜、留着是脏数据），签名是在生成那一刻掰正。
+In the prompt, a relation changes from `- works_at (works at): description` to `- works_at (works at): Person → Organization. description`. This is a **type signature for the model**, reducing bad triples like "Alice works_at Seattle" at the source, instead of catching them afterward — after-the-fact checks face a fact already extracted (discard it and lose information, or keep it and pollute the data). A signature corrects the model at the moment of generation.
 
-**是引导不是强制**：本体写错时模型看到原文说了别的仍可覆盖；强制闸门则会系统性丢数据（`part_of` 烧我们的正是这种方式）。
+**Guide, do not force.** If the ontology is wrong, the model can still follow what the source text says. A hard gate would discard data systematically — the same way `part_of` burned us before.
 
-大本体下（P3 规模）它换位置继续有用：预测谓词时，**domain/range 与实际主宾类型匹配的候选关系排名更高**，作为检索排序信号。
+At larger scale (P3), domain/range still helps, in a different role: when predicting a predicate, **rank candidate relations higher when domain/range match the actual subject and object types**, as a retrieval-ranking signal.
 
-三件事的必要性不同：**存**（是，P5 的正经输入，成本在解析器里本来就要写）、**进提示词当签名**（是，最高性价比，约十行）、**校验/自动升格/违规队列**（否，P3 用更丰富的证据做同一件事，且用可能错的声明驱动自动动作风险高）。
+The three possible uses differ in value: **store it** (yes — it is real input to P5, and the parser already has to write it); **put it in the prompt as a signature** (yes — the highest return for about ten lines of code); **validate it, auto-upgrade on it, or queue violations from it** (no — P3 uses richer evidence for the same job, and driving automatic actions from a declaration that might be wrong is risky).
 
-**交集不实现，理由是架构性的**：**因为保留了原文，投影就不必语义完整**。投影只服务提示词与界面展示，两者都接受简化；需要完整语义的是推理机，而它读的是 blob 里的原文。实现交集意味着要表达"既是 A 又是 B"的匿名类——往描述逻辑走的第一步，会把 schema 拖进类表达式的泥潭，而收益只是提示词多一行字。
+**We do not implement intersection semantics, for architectural reasons.** **Because we keep the raw source, the projection does not need to be semantically complete.** The projection only serves the prompt and the UI, and both accept simplification. Full semantics belong to the reasoning engine, which reads the raw blob. Implementing intersection means expressing an anonymous class ("is both A and B"), a first step toward description logic that would pull the schema into class expressions, for a gain of one extra line in the prompt.
 
-**多继承要真支持**：`type_matches_domain`（`extraction.rs:137`）沿单父链上溯。丢掉一个父分支，那分支上的属性会**静默失配**——抽出来了、写入时被挡、不报错。补法：`entity_type_parents` 关联表存全部父类，domain/range 判定走 DAG（访问集防环），左栏仍按主父展示成树，避免同一个类出现多次。
+**Multiple inheritance needs real support.** `type_matches_domain` (`extraction.rs:137`) walks up a single parent chain. Dropping a parent branch makes attributes on that branch **fail silently** — extracted, then blocked at write time, with no error. Fix: store all parents in an `entity_type_parents` join table, and check domain/range membership over the DAG (with a visited set to guard against cycles). Keep showing the left panel as a tree using the primary parent, so the same type does not appear twice.
 
-**两个必须在预览里说清的**
-- **哪些关系会因 `functional` 而开启冲突检测**——这正是 `part_of` 那个坑，企业本体声明为函数性但数据不遵守，导完就是一队假冲突
-- **有多少类没有 `rdfs:comment`**——它们在 P3 的自动分类里质量会明显偏低
+**Two things the import preview must state clearly**
+- **Which relations will turn on conflict detection because of `functional`.** This is exactly the `part_of` trap: an enterprise ontology declares a relation functional, but the data does not follow it, and the import produces a batch of false conflicts.
+- **How many types have no `rdfs:comment`.** Those types will score noticeably lower in P3's automatic classification.
 
-**流程**：上传 → **dry-run 预览**（新建/更新/暂未投影各多少、上述两项警告）→ 确认才落库。绝不让上传一个文件就不可逆地改掉本体。
+**Flow**: upload → **dry-run preview** (counts of new/updated/not-yet-projected, plus the two warnings above) → confirm before writing. Never let a single file upload change the ontology irreversibly.
 
-**v1 砍掉**：OWL/XML 与 Manchester 语法（Turtle + RDF/XML 覆盖 Protégé 导出的绝大多数）、任何推理、个体导入、反向导出。
+**Cut from v1**: OWL/XML and Manchester syntax (Turtle and RDF/XML cover most Protégé exports), any reasoning, individual (instance) import, and export back to OWL.
 
-**个体（ABox）永不作为事实导入**——不是能力问题，是原则：每条事实必须有证据链和出处，凭空塞进来的实例破坏的正是这个地基。它们随原文件保存，将来推理机可当背景知识读。
+**Individuals (ABox data) are never imported as facts** — not a limitation, a principle. Every fact must carry an evidence chain and a source. Instances inserted with no such chain would break that foundation. They stay in the saved raw file; the future reasoning engine may read them as background knowledge.
 
-**依赖**：`oxttl` + `oxrdfxml`（Oxigraph 那套小而专的 crate）。不引 `horned-owl`，我们不需要推理。工作区目前无任何 RDF 依赖。〔已引入，住在 `utopia-ingest`。〕
+**Dependency**: `oxttl` and `oxrdfxml` (the small, focused crates from Oxigraph). We do not use `horned-owl`; we do not need reasoning. The workspace had no RDF dependency before this. (Now added, in `utopia-ingest`.)
 
-> **修订记录 · P2a + P2b 已落地**（`feat/owl-import`）
+> **Revision note · P2a and P2b are live** (`feat/owl-import`)
 >
-> 落地的是三层里的前两层与整条预览流程：解析（`utopia-ingest/src/ontology_rdf.rs`）、
-> 计划与执行（`utopia-server/src/owl_import.rs`，预览与落库**共用同一个 `plan()`**）、
-> 界面（本体页左栏底部 Import 入口 → 选文件 → 计划 → 确认）。
-> `ontology_imports` 表与 `entity_types.iri` / `relation_types.iri` 见 `ontology_imports` 的建表注释。
+> The first two layers and the full preview flow are live: parsing (`utopia-ingest/src/ontology_rdf.rs`), planning and execution (`utopia-server/src/owl_import.rs`, where preview and commit **share one `plan()` function`), and the UI (an Import control at the bottom of the ontology page's left panel → pick a file → plan → confirm). See the `ontology_imports` table and the `entity_types.iri` / `relation_types.iri` columns for storage details.
 >
-> **对着真实词汇表验证，不是自己写的样例**。FOAF（RDF/XML，635 三元组）：
-> 15 类 + 89 属性，`functional` / `inverse_functional` / domain / range 全部读出；
-> DCTerms（Turtle，700 三元组）：22 类 + 55 属性。**自己手写的样例文件全部通过，
-> 而真实的 FOAF 在第一行就死了**——格式判定写反了，而且文件开头的 `<!--` 注释把
-> `<rdf:` 推出了嗅探窗口。现在扩展名是强信号，内容只在明显是 Turtle 时才推翻它。
+> **Validated against a real vocabulary, not hand-written samples.** FOAF (RDF/XML, 635 triples): read 15 classes and 89 properties, including `functional`, `inverse_functional`, domain, and range. DCTerms (Turtle, 700 triples): 22 classes and 55 properties. **All our hand-written sample files passed, but real FOAF failed on the first line.** The format detector had the check backward, and a leading `<!--` comment pushed `<rdf:` past the detection window. Now a file extension is a strong signal; content only overrides it when it is clearly Turtle.
 >
-> **预览多报一件本文没写的事：key 撞车**。FOAF 的 `Person` 与我们内置的 `person`
-> 同名不同身份。当时想的是自动加后缀，但那会让**下一次重导入认不出自己上次建的是
-> 哪个**——这正是本文论证 IRI 必要性时用的那个例子，只是换了个方向出现。所以：
-> 报告，不解决。想要导入的那份，先给现有的改名。
+> **The preview also reports one case not covered here: key collisions.** FOAF's `Person` shares a name with our built-in `person`, but they are different identities. The first idea was to add a suffix automatically, but that would stop a later re-import from recognizing what it built last time — the same case this document used to justify the IRI, seen from the other side. So: report it, do not resolve it automatically. To import the new one, rename the existing one first.
 >
-> 〔**后来改了一半**（#78、#145）：本地同名行**没有 IRI**时被认领——它是种子或手工建的占位者，被词表接管否则整棵树是断的；认领时形状跟着改成「方」（词表声明的）。两边都有 IRI 而 key 撞车的仍然报告不解决。〕
+> (**Later changed in part** (#78, #145): a local type with the same name and **no IRI** is now adopted — it is a seed or a manually created placeholder, and the vocabulary should take it over, or the tree stays broken. On adoption, its shape switches to "square" (declared by a vocabulary). Key collisions where both sides have an IRI are still reported, not resolved.)
 >
-> **暂未落地的三件**——属性落库、domain/range 关联表与类型签名、多继承 DAG——
-> 照着 P2b 的产物重新算过账，独立成节：见下方 **P2c**。〔四件均已落地，见 P2c 末尾。〕初稿在这里写的依赖顺序
-> 有一处高估了（属性落库要等的那个映射，P2b 里已经建好了），那节里就地留痕。
+> **Three items not yet done** — storing attributes, the domain/range join tables and type signature, and the multi-parent DAG — are re-costed against what P2b actually built, in a separate section below: **P2c**. (All four are now done; see the end of P2c.) The first draft overstated one dependency here: attribute storage does not need to wait on the parent mapping, since P2b already built it.
 >
-> **一个自己犯的错值得记**：`OntologyImportView` 的字段叫 `imported_at`，前端类型
-> 写成了 `created_at`。TypeScript 一声不吭——类型是我声明的，它只保证代码内部自洽，
-> 不保证与服务端一致。界面上显示成 `Invalid Date` 才发现。同一次还有服务端往
-> `conflict_with` 里塞了中文兜底文案 `（手工建的）`，直接漏进英文界面。
-> 两件事同一个教训：**服务端不产出展示文案**，措辞归界面；跨语言的边界要用真数据看一眼。
+> **Worth recording, a mistake of our own**: the `OntologyImportView` field is named `imported_at`, but the frontend type declared it as `created_at`. TypeScript said nothing — a type only guarantees internal consistency, not agreement with the server. The bug surfaced as `Invalid Date` in the UI. In the same change, the server also sent a Chinese fallback string, `（手工建的）`, into `conflict_with`, leaking straight into the English UI. Same lesson twice: **the server must not produce display text**; wording belongs to the UI. Check cross-language boundaries against real data.
 
 ---
 
-### P2c · 属性落库、domain/range、类型签名、多继承
+### P2c · Attribute storage, domain/range, type signature, multiple inheritance
 
-> 这一节是 P2a/P2b 落地后照着代码重新算的账。三件事的依赖顺序与初稿不同，
-> **其中一件比初稿估计的近**——原文说属性落库要等 domain 解析，而那个映射
-> 在 P2b 里已经建好了。
+> This section re-costs the work after P2a/P2b shipped. The order differs from the first draft. **One item is closer than first estimated**: the draft said attribute storage must wait on domain resolution, but P2b already built that mapping.
 
-#### 一、属性落库：单域的现在就能做
+#### 1. Attribute storage: single-domain attributes can ship now
 
-属性在产品里早已完整：`relation_types` 一表两用（`kind='attribute'`），
-`domain_type_id` 指明挂在哪个类下，`datatype` / `unit` 描述取值，值走
-`facts.object_value`，时态、证据、审阅全套复用（见 `relation_types.kind`）。
+Attributes are already fully supported in the product: `relation_types` serves two roles (`kind='attribute'`), `domain_type_id` names the owning type, `datatype` and `unit` describe the value, the value lives in `facts.object_value`, and time, evidence, and review all reuse the same machinery (see `relation_types.kind`).
 
-缺的只是**导入器不建它们**。FOAF 的 54 个 `owl:DatatypeProperty` 解析出来了、
-预览里报了数，但 `apply()` 跳过。初稿把原因记成"要 domain，而 domain 要等类
-先建好并解析 IRI → id"——**那个映射 `id_of: HashMap<IRI, Uuid>` 在 P2b 里
-已经为解析父类建好了**。真正缺的是三小件：
+**The only missing piece is that the importer does not create them.** FOAF's 54 `owl:DatatypeProperty` entries parse correctly and the preview reports a count, but `apply()` skips them. The first draft blamed this on "attributes need domain resolution, which needs classes built first" — but the mapping `id_of: HashMap<IRI, Uuid>` was already built in P2b to resolve parent classes. Three small gaps remain:
 
-- **`rdfs:range` → `datatype`，三路而不是两路**：
+- **`rdfs:range` → `datatype`, with three outcomes, not two**:
 
-  | 情形 | 处置 |
+  | Case | Handling |
   |---|---|
-  | range 能映射 | 照映射建。number 收 `decimal` `integer` 及其全部有界/无符号变体、`double` `float`、`owl:real` `owl:rational`；date 收 `date` `dateTime` `dateTimeStamp` `gYear` `gYearMonth`（我们的日期格式本就是 `YYYY[-MM[-DD]]`，逐级可省）；bool 收 `boolean`；text 收 `string` 及其派生、`anyURI`、`rdf:langString`、`rdfs:Literal` |
-  | **没写 range** | 建成 `text`，在预览里列出。词汇表没做声明，我们只知道是字面量，`text` 是诚实的超集 |
-  | range 存在但**类型**表达不了 | 建成 `text` **并报告**：`time` `gMonth` `gDay` `gMonthDay`（缺年）、`duration` 系列（时长不是时点）、多条 `rdfs:range`（交集陷阱：不猜类型，但值仍是字面量）、以及任何我们不认识的类型 IRI |
-  | 抽取器**不可能从散文里读出**这种值 | **跳过并报告**：`base64Binary` `hexBinary`（二进制块）、`rdf:XMLLiteral`（XML 片段）、`QName` `ID` `IDREF` `ENTITY`（XML 内部管道） |
+  | Range maps directly | Build with the mapping. `number` covers `decimal`, `integer` and its bounded/unsigned variants, `double`, `float`, `owl:real`, `owl:rational`. `date` covers `date`, `dateTime`, `dateTimeStamp`, `gYear`, `gYearMonth` (our date format is already `YYYY[-MM[-DD]]`, each part optional). `boolean` covers `boolean`. `text` covers `string` and its subtypes, `anyURI`, `rdf:langString`, `rdfs:Literal`. |
+  | **No range given** | Build as `text`, and list it in the preview. The vocabulary made no declaration; all we know is that it is a literal, and `text` is an honest superset. |
+  | Range exists but our types cannot express it | Build as `text` **and report it**: `time`, `gMonth`, `gDay`, `gMonthDay` (no year), the `duration` family (a span, not a point in time), multiple `rdfs:range` statements (the intersection trap — do not guess the type, but the value is still a literal), and any type IRI we do not recognize. |
+  | The extractor **could never read this value from prose** | **Skip it and report it**: `base64Binary`, `hexBinary` (binary blobs), `rdf:XMLLiteral` (an XML fragment), `QName`, `ID`, `IDREF`, `ENTITY` (internal XML plumbing). |
 
-  > **两次修订，第二次推翻了第一次。**
+  > **Two revisions. The second overturns the first.**
   >
-  > 初稿说「不猜成 text，因为类型错的属性会让取值被 `attr_datatype` 挡掉」。
-  > 查 `normalize_attr_value` 后不成立——**`text` 接受任何字符串，从不拦**，
-  > 会拦的是 number / date / bool。
+  > The first draft said "do not guess `text`, because a wrongly typed attribute would let a value get blocked by `attr_datatype`." Checking `normalize_attr_value` shows this is false — **`text` accepts any string and never blocks**. Only `number`, `date`, and `boolean` can block a value.
   >
-  > 于是改成「range 存在就是词汇表做了声明，降级成 text 会把它扔掉且不留痕迹」。
-  > **这条也站不住**：预览就在报告它，何来「不留痕迹」。而跳过的代价是属性根本
-  > 不存在，抽取器不会被告知它，那条知识**彻底不会被捕获**——这正是本仓库反复
-  > 当成最坏结果的那种失败。
+  > The next idea was: "the vocabulary made a declaration, so downgrading to `text` throws it away with no trace." **This also fails**: the preview already reports it, so nothing is untraced. The real cost of skipping is that the attribute does not exist at all. The extractor is never told about it, and that piece of knowledge **is never captured** — exactly the failure this project treats as worst.
   >
-  > 正确的分界不是「能不能精确映射」，也不是「该不该进图谱」——属性值本来就在图谱里。
-  > 是**「抽取器有没有可能从散文里读出这个值」**。「门店每天 9:00 开门」里有
-  > `09:00`，所以 `xsd:time` 的属性填得上，按 text 存只丢排序语义，值还在。
-  > 一张 base64 平面图不会出现在散文里，所以那个属性建了也永远是空的。
+  > The right line is not "can we map it precisely" or "should it be in the graph" — an attribute value already belongs in the graph. The line is **"could the extractor ever read this value out of prose."** "The store opens at 9:00" contains `09:00`, so an `xsd:time` attribute can be filled; storing it as `text` only loses sort order, the value survives. A base64 floor plan never appears in prose, so that attribute would exist but stay forever empty.
   >
-  > 跳过它保护的不是数据（本来就不会有值），是**提示词**：每个属性都是抽取
-  > 提示词里的一行，每个文本块付一遍，永远填不上的那些就是逐块付费的死噪音。
-- **domain 指向没被导入的类**（外部词汇表里的类）：跳过 + 计入预览，不静默。
-- **多个 `rdfs:domain`**：存不下。这一条才真的要等关联表。
+  > Skipping it protects not the data (which would never have a value anyway) but **the prompt**: every attribute is a line in the extraction prompt, billed once per chunk. Attributes that can never be filled are pure, repeated noise cost.
+- **Domain points to a class that was not imported** (a class in an external vocabulary): skip it and count it in the preview; do not skip silently.
+- **Multiple `rdfs:domain` values**: cannot be stored yet. This case truly needs the join table.
 
-所以顺序是：**先落单域属性**（P2b 的产物已经够用），多域的随关联表一起。
+So the order is: **ship single-domain attributes first** (P2b's output already supports this); multi-domain attributes wait for the join table.
 
-> **顺带查明的一件事：属性抽取这条路此前是死的。**
+> **One more thing found along the way: the attribute extraction path had never run.**
 >
-> 代码是全的——提示词里有属性段与规则 10，`ExtractedFact` 有 `value`，
-> `normalize_attr_value` 按 datatype 校验，值落 `facts.object_value`，证据/时态/审阅全套复用。
-> 但**内置本体一个属性都没有**，所以 `attr_lines` 一直是空的，整段属性提示词从未出现过。
-> 除非有人手工建属性，这条路从落地起就没被执行过。
+> The code was complete: the prompt has an attribute section and rule 10, `ExtractedFact` has a `value` field, `normalize_attr_value` validates by datatype, values land in `facts.object_value`, and evidence, time, and review all reuse the same machinery.
+> But **the built-in ontology had zero attributes**, so `attr_lines` was always empty and the whole attribute section of the prompt never appeared. Unless someone built an attribute by hand, this path had never executed since it shipped.
 >
-> OWL 导入开始建属性，它就变成活的了。端到端验过一遍（三个 datatype 各一个）：
+> OWL import starts creating attributes, which brings this path to life. We tested it end to end, one case per datatype:
 >
 > ```
-> floor_area  {"value": 860}          number，不是字符串
+> floor_area  {"value": 860}          number, not a string
 > opened_on   {"value": "2024-09-01"} date
-> opens_at    {"value": "10:00"}      text（降级的 xsd:time）
+> opens_at    {"value": "10:00"}      text (downgraded from xsd:time)
 > ```
 >
-> 证据、置信度、界面渲染都对，零丢弃信号。**`opens_at` 那两条在旧的跳过规则下
-> 根本不会存在**——这是存得下就别丢那个决定的直接证据。
+> Evidence, confidence, and UI rendering were all correct, with zero discard signals. **Under the old skip rule, the two `opens_at` cases would never have existed at all** — direct evidence that storing something beats losing that decision.
 
-#### 二、关联表：多值 domain/range
+#### 2. Join tables: multi-value domain and range
 
 ```sql
-relation_type_domains(relation_type_id, entity_type_id)   -- 谁能当主语
-relation_type_ranges (relation_type_id, entity_type_id)   -- 谁能当宾语
+relation_type_domains(relation_type_id, entity_type_id)   -- who can be the subject
+relation_type_ranges (relation_type_id, entity_type_id)   -- who can be the object
 ```
 
-OWL 里一个属性有多个 domain 是常态。`datatype` 仍留在 `relation_types` 行上——
-数据属性的 range 是字面量类型不是类，`ranges` 表只服务对象属性。
+A property with multiple domains is common in OWL. `datatype` stays on the `relation_types` row, since a data property's range is a literal type, not a class; the `ranges` table serves object properties only.
 
-**规范上的坑（前文已述，此处只标处置）**：同一属性的多条 `rdfs:domain` 在 RDFS 里
-是**交集**不是并集。一者是另一者的子类则取更具体的；互不包含则报"暂未投影"，不猜。
+**The same spec trap noted above, restated here as the rule**: multiple `rdfs:domain` values on one property are an **intersection** in RDFS, not a union. If one is a subclass of the other, keep the more specific one; if neither contains the other, report "not yet projected," and do not guess.
 
-#### 三、提示词类型签名
+#### 3. Type signature in the prompt
 
-关系行 `- works_at: 描述` 变成 `- works_at (person → organization): 描述`。
+A relation line changes from `- works_at: description` to `- works_at (person → organization): description`.
 
-**它是签名不是闸门**——在生成那一刻减少"Alice works_at 西雅图"，而不是等错了再拦。
-事后校验面对的是既成事实（丢掉可惜、留着是脏数据），签名是在写出来之前掰正。
-本体写错时模型看到原文说了别的仍可覆盖；硬闸门会系统性丢数据，`part_of` 烧我们
-的正是那种方式。
+**It is a signature, not a gate** — it reduces bad output like "Alice works_at Seattle" at generation time, instead of catching it after the fact. An after-the-fact check faces a fact already extracted (discard it and lose information, or keep it and pollute the data). A signature corrects the model before it writes the fact. If the ontology is wrong, the model can still follow what the source text says; a hard gate would discard data systematically, the same way `part_of` burned us before.
 
-> **新增约束（来自 0004 的语言工作）：签名里必须用 key，不能用 label。**
-> 中文库里 `person` 的 label 是「人物」，写成 `(人物 → 组织)` 等于教模型输出
-> 一个不存在的类型。这与"描述里引用其它类型一律用 key"是同一条理由，
-> 而且今天已经把 label 整个撤出了提示词（有描述时不送），签名不该把它请回来。
+> **New constraint (from the language work in 0004): the signature must use the key, not the label.** In a Chinese-language base, the label for `person` is "人物". Writing `(人物 → 组织)` teaches the model to output a type that does not exist. This follows the same rule as descriptions referencing other types: always use the key. Labels are already removed from the prompt when a description is present, so the signature should not bring them back.
 
-#### 四、多继承 DAG
+#### 4. Multiple inheritance as a DAG
 
-`entity_types.parent_id` 曾是单列，只能表达树。而多继承在真实词汇表里
-是常态——FOAF 的 `Person` 同时是 `foaf:Agent` 与 `geo:SpatialThing`，两个方向，
-不是同一根链上的祖孙。P2b 目前**只投影第一个父类**。
+`entity_types.parent_id` used to be a single column, able to express only a tree. Multiple inheritance is common in real vocabularies — FOAF's `Person` is both a `foaf:Agent` and a `geo:SpatialThing`, two different lines, not ancestors on one chain. P2b today **projects only the first parent**.
 
-丢掉一支的后果：`type_matches_domain`（`extraction.rs`）沿存下来的那条单链上溯，
-所以 domain 在另一支上的属性判定不过——`latitude` 的 domain 是 `SpatialThing`，
-而 `person` 只挂在 `agent` 下，这条事实抽出来了却被挡掉。
+Dropping a branch has a real cost: `type_matches_domain` (`extraction.rs`) walks the one stored chain, so an attribute whose domain sits on the other branch fails its check — `latitude` has domain `SpatialThing`, but `person` is stored only under `agent`, so this fact is extracted and then blocked.
 
-> **修订**：初稿把这个后果写成"静默失配"。#41 之后不再静默——
-> `extraction.rs` 会发 `attr_domain_mismatch` 丢弃信号，在文库里显示成
-> "属性挂在了错误的类上"。仍然是错的（那条事实本该落地），但看得见。
-> 严重度因此从"无声丢知识"降到"可见地少一条"，优先级相应后移。
+> **Revision**: the first draft called this a "silent mismatch." Since #41, it is no longer silent: `extraction.rs` now emits an `attr_domain_mismatch` discard signal, shown in the library as "attribute attached to the wrong type." It is still wrong (the fact should have landed), but it is now visible. Severity drops from "knowledge lost silently" to "visibly one fact short," so priority moved down.
 
-改动落在四处：
+This change touches four places:
 
-| | 现在 | 之后 |
+| | Today | After |
 |---|---|---|
-| 存储 | `parent_id` 单列 | `entity_type_parents(child_id, parent_id)` 关联表 |
-| 上溯 | 单链循环 10 次 | 广度优先 + **访问集**（菱形继承会重复到达同一祖先） |
-| 建/改类 | 无环风险 | **必须查环**：A→B→A 会让上溯死循环 |
-| 左栏 | 直接是树 | 仍按**主父**展示成树 |
+| Storage | Single `parent_id` column | `entity_type_parents(child_id, parent_id)` join table |
+| Walking up | Single-chain loop, 10 levels | Breadth-first with a **visited set** (diamond inheritance reaches the same ancestor twice) |
+| Create/edit a type | No cycle risk | **Must check for cycles**: A→B→A would loop forever |
+| Left panel | Already a tree | Still shown as a tree, using the **primary parent** |
 
-最后一行是产品判断：**存储是 DAG，展示是树**。左栏若如实画 DAG，`person` 会同时
-出现在 `agent` 和 `spatial_thing` 底下，用户点哪个都对，但会以为是两个东西。
-所以保留"主父"专供展示——它不再是唯一的父，只是画树时选的那一支。
+The last row is a product choice: **storage is a DAG, display is a tree.** If the left panel drew the true DAG, `person` would appear under both `agent` and `spatial_thing`, and either click would be correct but would look like two different things. So we keep a "primary parent" purely for display — no longer the only parent, just the branch chosen for the tree view.
 
-#### 顺序与理由
+#### Order and reasoning
 
-1. **单域属性落库** —— 只欠 range→datatype 映射，把一个自陈的洞补完
-2. **domain/range 关联表** —— 解锁多域属性，且是签名的前提
-3. **提示词类型签名** —— 十行，本文认定的最高性价比项
-4. **多继承 DAG** —— 独立于前三项，但因为不再静默而排在最后
+1. **Single-domain attribute storage** — only the range-to-datatype mapping is missing; this closes a known gap.
+2. **Domain/range join tables** — unlocks multi-domain attributes and is a prerequisite for the signature.
+3. **Type signature in the prompt** — about ten lines, the highest return in this document.
+4. **Multiple-inheritance DAG** — independent of the first three, placed last only because it is no longer silent.
 
-前三项是一条链，第四项可以并行。
+The first three form a chain; the fourth can run in parallel.
 
-> **修订记录（2026-09-02）：四项全部建成。** 属性由导入器建（`create_attribute_with_iri`）；`relation_type_domains` / `relation_type_ranges` 建表；
-> 签名进提示词（`works_at (person → organization)`），且只提铺出去的类，整侧没选中退回 `*`；`parent_id` 单列**已不存在**，多父落 `entity_type_parents`（带 `is_primary` 供左栏画树），
-> 判定改成广度优先加访问集。另一处与本文不同：`update_relation_type` 现在**允许改 domain / range**——签名不是身份，`kind` 仍不可变。
-> 全部 OWL 公理的投影现状见 P5 的修订。
+> **Revision note (2026-09-02): all four items are done.** The importer creates attributes (`create_attribute_with_iri`). `relation_type_domains` and `relation_type_ranges` exist as tables. The signature is in the prompt (`works_at (person → organization)`), listing only the types already shown on that side; if none is selected, it falls back to `*`. The single `parent_id` column **no longer exists**; multiple parents live in `entity_type_parents` (with an `is_primary` flag for the tree view). Membership checks are breadth-first with a visited set. One change beyond this document: `update_relation_type` now **allows changing domain and range** — a signature is not an identity, though `kind` still cannot change.
+> See the P5 revision for the current state of all OWL axiom projection.
 
 ---
 
-### P3 · 类型消解 —— 让大本体可用
+### P3 · Type resolution — making a large ontology usable
 
-**问题**：今天类型由 LLM 在抽取时从**内联清单**里挑。9 个类很好；800 个类时提示词爆炸且准确率下降。
+**Problem**: today the model picks a type from an **inline list** at extraction time. Nine types work well. Eight hundred types blow up the prompt and lower accuracy.
 
-**分三层，第一层最要紧**
+**Three layers. The first matters most.**
 
-1. **抽取只给粗类型**——提示词永远只列基础类（person/organization/product/place/event/concept）。**提示词大小从此与本体规模无关。**
-2. **类型消解（新后台任务）**——类的 `label + description` 嵌入成向量（一次性）；实体积累名字和事实后，用**合成文本**（名字 + 参与的谓词 + 粗类）嵌入检索 top-k 候选类，只把这 k 个交给 LLM 裁决。高置信自动升格，灰区进 Review，结果缓存。
-3. **推理推出的类型**——有 `equivalentClass` 定义的类无需模型判断（等 P5）。
+1. **Extraction returns only a coarse type.** The prompt always lists only base types (person, organization, product, place, event, concept). **Prompt size becomes independent of ontology size.**
+2. **Type resolution (a new background task).** Embed each type's `label + description` once. As an entity accumulates a name and facts, embed **synthetic text** (name, plus the predicates it appears in, plus its coarse type), retrieve the top-k candidate types, and hand only those k to the model for a decision. High-confidence matches upgrade automatically; the gray zone goes to Review; results are cached.
+3. **Types inferred by reasoning.** A type with an `equivalentClass` definition needs no model judgment (waits for P5).
 
-> **修订记录（跑过真实本体之后）**。上面三条写在没人量过真实本体的时候，实测把
-> 其中两条推翻了。原文留着，因为推翻它的理由比结论有用。
+> **Revision note, after testing on a real ontology.** The three points above were written before anyone measured a real ontology. Testing overturned two of them. The original text stays, because the reasoning behind the reversal is more useful than the conclusion.
 >
-> **一、「800 个类」是低估，而且类清单不是大头。** schema.org 当前版实测 1010 类 /
-> 1676 属性，抽取提示词 **109,083 tokens 一个分块**。三段的占比是
-> 类 38% / 关系 34% / 属性 28%——**第一层只碰得到 38% 的那一段**，且原文完全没提
-> 属性段。就算把类砍到只剩顶层，提示词仍有约 64k。
+> **First, "800 types" understates the problem, and the type list is not the largest part.** The current schema.org release measured out at 1,010 types and 1,676 properties, producing a **109,083-token prompt per chunk**. The three sections split as 38% types, 34% relations, 28% attributes — **the first layer only touches the 38%**, and the original text never mentioned the attribute section at all. Even trimming to only top-level types still leaves about 64k tokens.
 >
-> **二、「只列基础类」是错的**，理由有三条，都在数据里：
-> - 它把用户自己编的本体从抽取里整个拿掉。40 个类约 2k tokens，**根本不构成问题**；
->   拿 968 个类的数字去论证所有本体都只列 6 个，是过度外推。我们只有 12 个类（好）
->   与 968 个类（坏）两个点，中间一片空白。
-> - 它是 `related_to` 那个坑的镜像：**给了逃生舱模型就会用**。只列基类等于让所有
->   东西都只能是 `organization`。
-> - 抽取当场因粗类丢掉的事实**改类救不回来**（`type_matches_domain` 在落地时就
->   校验 domain，实测见 `attr_domain_mismatch: position@person`）；而粗类还会让
->   实体互相更"像"，`classify_type_drift` 判不出 `Disjoint`，可合并候选变多，
->   **合并是真写账本的**。
+> **Second, "list only base types" is wrong, for three reasons, all in the data:**
+> - It removes a user's own custom ontology from extraction entirely. Forty types cost about 2k tokens — **not a real problem**. Extrapolating from the 968-type case to every ontology overreaches; we have only two data points, 12 types (fine) and 968 types (a problem), with nothing in between.
+> - It mirrors the `related_to` trap: **give the model an escape hatch and it will use it.** Listing only base types means everything can only ever be `organization`.
+> - A fact dropped at extraction time due to a coarse type **cannot be recovered by retyping later** (`type_matches_domain` checks domain at write time; we measured `attr_domain_mismatch: position@person`). A coarse type also makes entities look more alike to each other, so `classify_type_drift` fails to flag `Disjoint`, more merge candidates appear, and **a merge really does write to the ledger.**
 >
-> **改成按预算**：本体小于预算就全列（今天就是这样且工作正常）；超了才按分块检索
-> top-K 内联，**且种子基类永远在场**当兜底。属性按 domain 逐类展开，类被裁了它自动
-> 跟着裁。预算按 token 数而不是类数量——类描述长度差着数量级。**预算定在哪还没量**，
-> 那需要把内联类数从 12 逐级加到 968，看事实数与耗时在哪一档开始掉。
+> **New design: switch by budget.** If the ontology is smaller than the budget, list it all (this already works today). Above the budget, retrieve the top-K types per chunk, **with the seed base types always present** as a fallback. Attributes expand per type by domain, so trimming a type automatically trims its attributes. The budget counts characters, not type count, since type descriptions vary in length by orders of magnitude. **Where to set the budget is not yet measured**; that needs raising the inline type count from 12 to 968 step by step and finding where fact count and latency start to drop.
 >
-> 〔**已落地**，见 [0006](0006-ontology-scale-and-the-prompt.md)：预算按**字符**而非 token，落在 `deployment_settings.ontology_prompt_budget`（24,000），每块 40 类 / 30 关系 / 30 属性，三个数都标着「待测」。
-> 「种子基类永远在场」在 #128 之后失效（没有种子了），换成**祖先补齐**：命中什么就把它的祖先一起铺出去。本文下方与开放问题里的「阈值 30」这根轴**从未存在过**。〕
+> (**Now shipped**, see [0006](0006-ontology-scale-and-the-prompt.md): the budget counts **characters, not tokens**, stored in `deployment_settings.ontology_prompt_budget` (24,000), at 40 types / 30 relations / 30 attributes per chunk — all three numbers marked "not yet measured." "Seed base types always present" stopped applying after #128 (seeds were removed); it was replaced by **ancestor backfill**: whatever type is retrieved also brings its ancestors along. The "threshold 30" axis discussed below in open questions **never existed**.)
 >
-> **三、第二层建成了，但比原文写的复杂**，见下。
+> **Third, the second layer shipped, but it is more complex than described here.** See below.
 
-#### P3a · 类型消解实测（已建成）
+#### P3a · Type resolution, measured (shipped)
 
-抽取给粗类，另给一个 **`specific_type`**：自由文本、不校验、不入本体，就是模型自己
-对这个实体的说法。**它是这一步的关键**——没有它，实测 17 个实体的 `proposed_type`
-全是空的，因为清单里总有个"差不多"的（本体有 `product`，模型选了它，心里那个
-"向量数据库软件"就此丢失）。有了它，任务从「读懂这是什么」变回「本体里哪个类叫
-这个名字」：短名字对短标签，正是向量索引擅长的形状。加上它之后，检索命中从
-**4/17 变成约 13/20**。
+Extraction returns a coarse type plus a separate **`specific_type`**: free text, not validated, not stored in the ontology — just the model's own description of the entity. **This field matters most.** Without it, in one test, all 17 entities' `proposed_type` came back empty, because the type list always has something "close enough" (the ontology has `product`, the model picks it, and its real description — "vector database software" — is lost). With it, the task changes from "understand what this is" back to "which ontology type has this name" — a short name matched to a short label, exactly what a vector index is good at. With this field added, retrieval hits rose from 4/17 to about 13/20.
 
-**候选两路来，取并集不合分数**：一路拿画像搜类的描述，一路拿语境向量搜已定类的
-实体、把它们的类当票投。第二路冷启动时结构性无效（库里已定类的实体全挂着基类，
-投不出更细的东西），它是第一路跑过一轮之后的放大器。
+**Two candidate sources, combined as a union, not scored together.** One path searches type descriptions using the entity's profile text. The other searches for entities with a similar context vector that already have a type, and treats their types as votes. The second path is structurally useless at cold start (existing typed entities all carry base types, so they cannot vote for anything finer); it becomes useful only after the first path has run a round.
 
-**距离不可比，三处都栽过**：跨实体不可比（`清华大学计算机系→computer_store` 0.46
-比 `星云科技→corporation` 0.59 还近，而前者荒谬）；两路之间不可比（类空间 vs
-实体空间）；**同一路的两个查询之间也不可比**——短查询"医药集团"产生的距离系统性地
-小于一整段画像，按距离合并就让名字那一路独占前几名，实测挤掉了三个上一轮自动
-通过的正确答案。**一律交替取，不合分数。**
+**Distances are not comparable, in three separate ways, each one seen in testing.** Not comparable across entities (a distance of 0.46 for "清华大学计算机系→computer_store" is closer than 0.59 for "星云科技→corporation", though the first match is absurd). Not comparable between the two paths (type-space vs. entity-space). **Not even comparable between two queries on the same path** — a short query like "医药集团" produces systematically smaller distances than a full profile paragraph. Merging by raw distance let the name-based path dominate the top results, pushing out three correct answers that had passed on the previous run. **Always alternate between the two sources; never merge by score.**
 
-**分档不能用模型自报的 confidence**：实测是双峰的（15 条全 ≥0.85、4 条 null，
-中间没有）——自报置信度是语气不是概率。改用「选中的类在不在粗类子树里」：在 =
-往下走一格，自动；不在 = 换了分类轴，进人工。
+**Do not use the model's self-reported confidence to set tiers.** Measured values were bimodal (15 cases at 0.85+ and 4 null, nothing between) — self-reported confidence is a tone, not a probability. Use instead: **is the chosen type inside the coarse type's subtree?** Inside = one step down, automatic. Outside = a different branch of classification, sent to a person.
 
-> **但这条判据测的往往不是风险。** 第二份语料 24 个实体报了 14 条跨轴、条条正确，
-> 因为它实际在测**种子类跟导入词汇表的分类树连没连上**：`organization`/`product`
-> 的 key 撞上了 schema.org 的同名类（被认领，子树 167/8 个后代），而 `location`
-> 没撞上——schema.org 的 `Place` 另起一个 key、209 个后代全挂那边，内置 `location`
-> 零子类，于是每一次 `location → city` 都算跨轴。
+> **But this criterion often measures the wrong thing.** On a second corpus, 24 entities produced 14 "different branch" flags, and all 14 were correct — because the check was really measuring **whether the seed type ever connected to the imported vocabulary's tree.** The keys for `organization`/`product` happened to match schema.org's same-named types (and were adopted, gaining 167 and 8 descendants respectively), while `location` did not match — schema.org's `Place` type used a different key and kept its 209 descendants on its own branch, leaving built-in `location` with zero children, so every `location → city` case counted as "different branch."
 >
-> 缓解办法是**按类对认可，不按实体**（`type_refinement_pairs`）：跨轴是
-> (粗类, 目标类) 这一对的属性，人认可一次就不再问。根治要把种子类接进导入本体的
-> 分类树——那是本体对齐，比这一步大。
+> The fix is to **approve by type pair, not by entity** (`type_refinement_pairs`). "Different branch" is a property of the pair (coarse type, target type); once a person approves a pair once, it is never asked again. A full fix means connecting the seed types into the imported vocabulary's tree — that is ontology alignment, a bigger job than this step.
 
-**拒绝必须给理由。** `left_alone` 一开始只是个数，而这一步的整个设计押在"选择
-'都不是'是个体面答案"上——最大的一档不透明。记上理由之后第一次跑就回答了此前
-答不出的问题：失败**全在检索一侧**（`administrative_area`、`periodical` 从没被端
-上来过），不在裁决。
+**A rejection must state a reason.** `left_alone` started as a bare count, and this whole design bets on "choosing 'none of these' is a respectable answer" — the largest, least transparent bucket. Once we logged the reason, the first run answered a question we could not answer before: failures were **entirely on the retrieval side** (`administrative_area` and `periodical` were never even offered as candidates), not in the decision step.
 
-**改类不进时间轴**：它是 `entities` 上一次 UPDATE 加一行 `entity_retypes`，
-实体历史只读 `facts`。所以错了不会自己显形——可撤销不等于会被撤销。这是先做
-preview 再做 apply 的理由。**该补的是让改类在实体历史里显形**，而不是把类型搬上
-双时态账本（P0 明确把实体做成可变行）。
+**A retype does not enter the time axis.** It is one `UPDATE` on `entities` plus one row in `entity_retypes`; entity history reads only `facts`. So a wrong retype does not show up on its own — reversible is not the same as reversed. This is why we run preview before apply. **The gap to close is making a retype visible in entity history**, not moving type onto the bitemporal ledger (P0 deliberately made entities a mutable row).
 
-#### P3b · 关系清单同样会膨胀（原先漏掉的）
+#### P3b · The relation list grows too, an earlier gap
 
+> **The extraction side of this section shipped**: the escape hatch is removed, prompt rule 8 covers it, and surface predicates land on the evidence row.
+> **The mapping-back-to-ontology half also shipped, but in a different shape than described here** — not a fully automatic retrieval decision, but "cluster → a proposal with its impact shown → one-click adopt and rewrite → reversible," behind a switch that defaults to on. See [0003](0003-ontology-growth-loop.md), which records three changes of judgment along the way.
 
-> **本节的抽取侧已建成**（撤逃生舱、提示词规则 8、表层谓词落在证据上）；
-> **映射回本体那一半也建成了，但形态与这里写的不同**——不是全自动的检索裁决，
-> 而是「聚类 → 带影响面的提案 → 一键采纳并改写 → 可撤销」，加一个默认开启的开关。
-> 见 [0003](0003-ontology-growth-loop.md)，含三次判断变化的留痕。
+The above solved entity types only. But next to the type list in the prompt sits the **relation list**, expanded in full from the ontology and resent for every chunk, same as types. Measured (Industry Corpus): 9 types cost 197 characters; 10 relations cost **250 characters** — relations are already the larger half. And **the codebase has no prompt caching at all** (`cache_control` has zero hits), so O(chunks × ontology size) has no cache to soften it. A department-scale ontology (300 types / 400 properties) costs roughly 4,200 tokens per chunk; at 181 chunks that is 760,000 input tokens — for just 28 documents.
 
-上面只解决了实体类型。但提示词里紧挨着类清单的是**关系清单**，同样由本体全量展开、同样每个分块重发。实测（Industry Corpus）：9 个类 197 字符，10 个关系 **250 字符**——关系已经是更大的那一半。且**代码库无任何 prompt caching**（`cache_control` 零命中），O(分块 × 本体) 没有缓存兜底。部门级本体（300 类 / 400 属性）约每分块 4200 token，181 分块 76 万输入 token——而这才 28 篇文档。
+**We missed this at first because of an asymmetry.** `(NVIDIA, acquired, Mellanox)` is a complete fact even without knowing NVIDIA is an Organization — **type is an annotation on a node, and can be added later.** But `(NVIDIA, ?, Mellanox)` is not a fact at all — **the predicate is the fact itself**, so "leave it blank, fill in later" does not work.
 
-**当初漏掉的原因是一个不对称**：`(NVIDIA, acquired, Mellanox)` 不知道 NVIDIA 是 Organization 也是完整事实——**类型是挂在节点上的注解，可延后**；而 `(NVIDIA, ?, Mellanox)` 不是事实，**谓词就是事实本身**，"先空着后补"不通。
+**The fix is a different middle state**: defer to a **surface predicate**, not to nothing — `(NVIDIA, "acquired", Mellanox)`, free text, storable, and something the model can produce without any vocabulary. A second pass, given the full sentence plus retrieved candidates, maps it onto an ontology relation, using the same machinery as type resolution. Domain/range acts as a ranking signal here (candidates whose subject/object types match rank higher).
 
-**出路是换中间态**：延后到**表层谓词**而非延后到空——`(NVIDIA, "acquired", Mellanox)`，自由文本，可存，模型无需词表即可产出。第二遍带着完整句子和检索候选映射到本体关系，与类型消解同一套机器。domain/range 在这里作排序信号（主宾类型匹配的候选排名更高）。
+Three outcomes, matching the pattern used in entity resolution: high confidence rewrites the predicate (**must append a new row and mark `supersedes`, never edit in place** — the same shape as a human correction, so entity history can show "first recorded as related to, later refined to builds"); the gray zone goes to Review; **no good candidate keeps `related_to`** and turns the phrase into an ontology suggestion. This last case matters most — **`related_to` is an honest "we don't know"; a wrong specific guess is a confident mistake** (later overturned: staying at "we don't know" is indeed more honest than guessing a specific relation, but that honesty should not be a word in the ontology — showing "related to" in the UI is not vagueness, it is a claim. See [0010](0010-no-relation-is-no-relation.md)) — and downstream reasoning would then reason from a wrong, specific relation.
 
-三档处置与实体消解同源：高置信改写谓词（**必须追加而非原地改**——插入新行 + `supersedes`，与人工纠正同构，实体历史页直接可展示"先记成 related to，后精化成 builds"）；灰区进 Review；**没有像样候选就保持 `related_to`** 并把短语变成本体建议。最后一档是关键——**`related_to` 是诚实的含糊，猜错则是自信的错误**〔**后被推翻**：保持「我不知道」确实比猜一个具体关系诚实，但那份诚实不该实现成本体里的一个词——界面上显示「有关联」不是含糊而是断言。见 [0010](0010-no-relation-is-no-relation.md)〕，而下游推理机会拿着错的具体关系去推导。
+#### But mapping is only half: the bigger half is removing the escape hatch
 
-#### 但映射只是一半：更大的一半是撤掉逃生舱
+> **Revision note**: this section first said only "extraction produces a surface predicate, then it gets mapped." Checking the data showed **that covers only about a tenth of cases**, so this splits into two parts.
 
-> **修订记录**：本节原本只写"抽取产出表层谓词、再映射"。查证后发现**那只覆盖约一成**，得拆成两条腿。
-
-实测（Industry Corpus）：
+Measured (Industry Corpus):
 
 ```
-ontology_misses  16 种谓词 / 38 次降级
-related_to 事实  359 条
+ontology_misses:  16 predicates / 38 downgrades
+related_to facts: 359
 ```
 
-**只有约 38 条是降级来的，其余 321 条（89%）是模型自己挑的 `related_to`。** 因为它就在本体清单里，提示词把它当合法选项列了出去（`rel_pairs` 只过滤 `kind == "attribute"`）。模型读到说不清的关系时不会去造词，直接拿这个万能选项——**我们递了个逃生舱，它用了 321 次，而这个逃生舱销毁信息。**
+**Only about 38 came from a downgrade. The other 321 (89%) were `related_to` chosen directly by the model.** It appears right there in the ontology's relation list, offered to the model as a valid option (`rel_pairs` only filters out `kind == "attribute"`). When the model meets a relation it cannot name clearly, it does not invent a word — it reaches for this universal option instead. **We handed it an escape hatch. It used it 321 times, and that escape hatch destroys information.**
 
-（核对过其他来源：`mappings.rs` 写的是 `mapped_to` 不是 `related_to`；`record_miss` 在事实循环里每条一次，所以 38 是降级事实数的上界。）
+(Checked other sources too: `mappings.rs` writes `mapped_to`, not `related_to`; `record_miss` runs once per fact inside the loop, so 38 is an upper bound on downgraded facts.)
 
-所以两条腿：
+So, two parts:
 
-1. **把 `related_to` 从提示词里撤掉**（保留在本体中当代码层兜底，但不列给模型）〔**括号内已作废**：`related_to` 整个删掉了，兜底改在读的时候发生，见 [0010](0010-no-relation-is-no-relation.md)〕。这样模型要么用真关系、要么写出原文说法，**兜底发生在代码里而非模型脑子里，短语一定被记下**。改动就是 `rel_pairs` 加一个过滤，极便宜——但**必须先有 `surface_predicate` 列**，否则只是把信息从"变成 related_to"换成"变成 related_to 外加一次 miss 计数"。
-2. **映射**（上文那套检索裁决）。
+1. **Remove `related_to` from the prompt** (keep it in the ontology as a code-level fallback, but do not list it for the model). (The parenthetical is now obsolete: `related_to` was removed entirely; the fallback now happens at read time, see [0010](0010-no-relation-is-no-relation.md).) This way the model either uses a real relation or writes down what the source actually says — **the fallback happens in code, not in the model's head, and the phrase is always recorded.** The change is one filter added to `rel_pairs`, cheap — but **it needs a `surface_predicate` column first**, or this only changes "becomes related_to" into "becomes related_to, plus one extra miss count."
+2. **Map it** (the retrieval-based decision process above).
 
-**存量修不回来**：现有 359 条没有 surface predicate，其中 321 条根本无原词可恢复。**只能靠重抽。** `Industry Corpus` 是基准语料，重抽是分内事；但这套逻辑若落到用户跑了半年的库上，必须明说"只对新抽取生效，存量要重建"。
+**Existing data cannot be fixed retroactively.** The current 359 rows have no surface predicate saved, and 321 of them have no way to recover the original word at all. **Re-extraction is the only fix.** `Industry Corpus` is our benchmark, so re-extracting it is expected — but if this logic reaches a base a user has run for months, we must say clearly: "this applies only to new extraction; existing data needs a rebuild."
 
-**流水线已跑了三分之二**：`ontology_misses` 有活数据（`available_from ×9`、`scales_to ×5`、`runs_on ×4`、`collaborated_with ×4`），`extraction.rs:366-383` 已在接受词表外谓词并记录表层形式，缺的只有映射那一步。今天它只是给人看的报表，不是消解器的输入。
+**Two-thirds of this pipeline already exists.** `ontology_misses` already holds live data (`available_from` ×9, `scales_to` ×5, `runs_on` ×4, `collaborated_with` ×4), and `extraction.rs:366-383` already accepts out-of-vocabulary predicates and records the surface form. Only the mapping step is missing. Today it is a report for a person to read, not an input to a resolver.
 
-**前置缺陷（需先修）**：降级有损——`f.predicate` 只进了 `record_miss` 的聚合，**事实上一字未留**，今天无法回答"哪些事实从 `available_from` 降级而来"。同"原文保真"原则：**先别扔，扔了不可逆**。
+**A prerequisite defect (fix first)**: downgrading loses information — `f.predicate` only goes into the `record_miss` aggregate, **the exact word is not kept anywhere**, so today there is no way to answer "which facts were downgraded from `available_from`." Same principle as keeping the raw source: **do not throw it away first; that cannot be undone.**
 
-> **修订记录**：初判是加 `facts.surface_predicate`。**错了**——查 `graph.rs:164-175` 后发现事实是去重的，该列会先写者胜。正确位置是 `fact_evidence`。
+> **Revision note**: the first plan was to add `facts.surface_predicate`. **Wrong** — `graph.rs:164-175` shows facts are deduplicated, so the first write would win that column. The right place is `fact_evidence`.
 
-**放在 `fact_evidence` 上，不是 `facts` 上**：`insert_fact_inner`（`graph.rs:164-175`）按 `(kb_id, subject_id, predicate_id, object_id)` 对存活事实去重，所以一条 `(A, related_to, B)` 会吸收多个分块——甲块说 "runs on"、乙块说 "optimized for"，合并成同一行。放 `facts` 上就是**先写者胜、其余静默丢弃**，正是本条要修的毛病。`fact_evidence` 每分块一行、已带 `quote`（该块的原文佐证），表层谓词是同一种东西：每次观察的原始形态。粒度对，且无需新增语义。
+**Store it on `fact_evidence`, not on `facts`.** `insert_fact_inner` (`graph.rs:164-175`) deduplicates live facts by `(kb_id, subject_id, predicate_id, object_id)`, so one `(A, related_to, B)` row can absorb several chunks — one chunk says "runs on," another says "optimized for," and they merge into the same row. Storing it on `facts` means **first writer wins, the rest silently lost** — exactly the bug this fix targets. `fact_evidence` already has one row per chunk and already carries a `quote` (the source text for that chunk); a surface predicate is the same kind of thing: the raw form of each individual observation. The grain matches, and it needs no new concept.
 
-加 `fact_evidence.surface_predicate TEXT`〔落地时列名叫 **`proposed_predicate`**，下同〕，两条路径都写（关系路径写降级前的 `f.predicate`；正常命中时写模型实际给的那个词，因为它可能是别名）。不等映射落地就有独立价值——Review 与实体面板可直接展示"原文说的是 available from，被降级成 related to"，而今天前端对 `related_to` 无任何特殊处理（`web/src/` 里零命中），降级对用户完全不可见。
+Add `fact_evidence.surface_predicate TEXT` (shipped as **`proposed_predicate`**, used below under that name). Write it on both paths (on the relation path, write the pre-downgrade `f.predicate`; on a normal match, write the exact word the model used, since it may be an alias). This has value even before mapping ships — Review and the entity panel can already show "the source said available from, downgraded to related to," which today is invisible to the user (the frontend has zero special handling for `related_to`).
 
-**映射不取代 miss 报表**：反复出现又映射不上的（`available_from ×9`）正是"本体该加这个关系"的治理信号（P4 燃料）。映射只吃高置信的那部分，其余留在 miss 里变建议。
+**Mapping does not replace the miss report.** A predicate that keeps recurring and never maps (`available_from` ×9) is exactly the signal that "the ontology should add this relation" (fuel for P4). Mapping only consumes the high-confidence cases; the rest stays in the miss report as a suggestion.
 
-**不要用 `profile_embedding` 做检索**：它是实体所在分块的质心，代表"出现在什么样的文档里"而非"是什么"。人物出现在 GPU 发布稿里，质心也是 GPU 味的。必须用合成文本重新嵌入。
+**Do not use `profile_embedding` for this retrieval.** It is the centroid of the chunks an entity appears in — it represents "what kind of document this appeared in," not "what this is." A person mentioned in a GPU launch article gets a GPU-flavored centroid. A fresh embedding of the synthetic text is required.
 
-**成本（按实测数据推算）**
-- 对现有小本体部署：**0**——类数低于阈值（约 30）时不启用，粗类即细类
-- 对比"天真导入 500 类"：**大幅省**。500 类塞进提示词约 8,000 tokens × 181 分块 = 140 万额外输入 tokens；检索方案把提示词按回 466 字符
-- 净增：**调用次数 +15~20%，tokens 约 +5%**——类型消解调用不含分块正文，比抽取调用小一个数量级；攒批（现有裁决任务已做到约 40:1）+ 分层阈值让多数实体不进 LLM
-- 新增：917 个短文本嵌入，量级相当于再嵌一百来个分块
+**Cost (projected from measured data)**
+- For an existing small-ontology deployment: **zero** — below the type-count threshold (about 30), this does not activate; the coarse type already is the fine type.
+- Compared with "naively import 500 types": **a large saving.** 500 types in the prompt cost about 8,000 tokens × 181 chunks = 1.4 million extra input tokens; the retrieval approach keeps the prompt near 466 characters.
+- Net change: **calls up 15–20%, tokens up about 5%** — type-resolution calls carry no chunk text, so they are an order of magnitude smaller than an extraction call; batching (already about 40:1 in the existing decision task) plus tiered thresholds keep most entities out of the model call entirely.
+- New cost: 917 short-text embeddings, on the same order as embedding a hundred more chunks.
 
-**真正的风险不是成本是质量**：大本体下错判会把噪声规模化。缓解仍是判据 4——只有相似度高且与次优拉开差距的才自动升格，灰区进 Review。
+**The real risk is not cost, it is quality.** At large ontology scale, a wrong decision turns into noise at scale. The mitigation is still criterion 4: auto-upgrade only when similarity is high and clearly ahead of the next-best option; send the gray zone to Review.
 
-**第一次抽取一定有类型**：`entities.type_id NOT NULL`，没有"未分类"状态。粗类是真类型不是占位符，小本体下它就是最终类型。升格挂在文档抽取完成的同一条任务链上（与攒批裁决并列），窗口是秒级。
+**Every entity gets a type on first extraction.** `entities.type_id NOT NULL`; there is no "unclassified" state. The coarse type is a real type, not a placeholder, and at small ontology scale it is the final type. Upgrading runs on the same task chain as the document extraction job, alongside batched adjudication, within seconds.
 
-> **修订记录（2026-09-02）：这一段两句都反了。** `type_id` 已改为可空（[0009](0009-no-type-is-a-type.md)），「没有类型」就是没有类型，且可能是**人的决定**（`type_source = human`）。
-> 「升格挂在同一条任务链上」**没有实现**：抽取结束只入队 `bootstrap_ontology` 与 `adjudicate_entities`，类型消解今天只能在本体页手动跑 preview → apply。
-> 原因见 P3a——检索命中率不足以自动跑。这是一个真缺口，不是取舍：**大本体下新实体的细化依赖人记得去点一下**。
+> **Revision note (2026-09-02): both sentences above are now reversed.** `type_id` is now nullable ([0009](0009-no-type-is-a-type.md)); "no type" now really means no type, and it can be **a human decision** (`type_source = human`). "Upgrading runs on the same task chain" **was never implemented**: extraction only queues `bootstrap_ontology` and `adjudicate_entities`; type resolution today runs only through a manual preview → apply on the ontology page. See P3a for why: retrieval hit rate is not yet good enough to run automatically. This is a real gap, not a trade-off: **at ontology scale, refining a new entity depends on a person remembering to click a button.**
 
 ---
 
-### P4 · 治理即经验
+### P4 · Governance as accumulated experience
 
-> 实际长出来的治理闭环是另一个形状——采纳即改写、可撤销、开关控制自动，
-> 见 [0003](0003-ontology-growth-loop.md)。三件事里**第 1 件已建成（2026-08-30，#114）**，
-> 2、3 待做。
+> The governance loop that actually shipped takes a different shape: adopt-and-rewrite, reversible, with a switch controlling automation. See [0003](0003-ontology-growth-loop.md). Of the three items below, **item 1 shipped** (2026-08-30, #114); items 2 and 3 are not done.
 
-**顺序不能反**：先有 P0 的编辑能力，才有"人工决策"可保护、可学习。
+**The order matters**: P0's editing capability must exist first, before a human decision can be protected or learned from.
 
-1. **决策不可被遗忘（正确性，不是功能）** —— **已建成**（`entities.type_source` · #114）。
-   `entities.type_source`（extracted / human / inferred），四条路径各有守卫：
-   类型消解取材、本体新类认领、抽取升格、改类落库（`actor` 有值即 `human`）。
+1. **A decision must not be forgotten (a correctness requirement, not a feature)** — **shipped** (`entities.type_source`, #114). `entities.type_source` (extracted / human / inferred) is guarded on four paths: type resolution input, ontology new-type adoption, extraction auto-upgrade, and manual retype (an `actor` value always sets it to `human`).
 
-   > **原文的前提当时就已经不成立，记在这儿因为找错方向比没找更费时间。**
-   > 这里写的是「重抽会静默吃掉治理成果」，而抽取那条路早有守卫
-   >（`resolve_type_drift` 只在 `type_key.is_none()` 时升格）。真正的漏在
-   > **类型消解**：取材条件里「现类还有子类就纳入」会把人拍过板的实体一并捞回去重判。
+   > **The premise here was already false when written; recorded because chasing the wrong lead costs more than not finding one.** This section said "a re-extraction would silently overwrite governance work," but the extraction path already guarded against that (`resolve_type_drift` only upgrades when `type_key.is_none()`). The real gap was **type resolution**: its input rule, "include an entity if its current type still has subtypes," pulls back in entities a human already decided on.
    >
-   > 而 [0009](0009-no-type-is-a-type.md) 之后又多一种：「没有类型」现在可能是
-   > **人的决定**，`type_id IS NULL` 分不出「还没判」和「人判了，就是没有」。
+   > After [0009](0009-no-type-is-a-type.md), there is a second case: "no type" can now be **a human decision**, and `type_id IS NULL` cannot tell "not yet judged" apart from "a person judged it and there is no type."
 
-2. **决策记忆做检索** —— **待做**。`resolution_verdicts` 已经是这个模式的一半，
-   但按 `pair_key` 精确匹配、不泛化。类型决策要走一步：存下人工改类时的检索向量与结果，
-   下次分类时**检索最相近的历史决策当证据**交给裁决器。按语境相似度泛化，不按名字相等（判据 3）。
+2. **Search past decisions as input** — **not done**. `resolution_verdicts` is already half of this pattern, but it matches by exact `pair_key`, without generalizing. Type decisions need one more step: store the retrieval vector and outcome of each human retype, then, for the next classification, **retrieve the most similar past decision as evidence** for the decision step. Generalize by context similarity, not by matching names (criterion 3).
 
-   > **建议排在评测语料之后**：这是三件里唯一一件「做完了也说不清是不是更好」的，
-   > 而本文头号开放问题正是缺真实企业本体做小样本评测。没有基准就调它，等于再拍一次脑袋。
+   > **Recommend sequencing this after a benchmark corpus exists**: this is the one item of the three where, even done, we could not tell if it helped — and the top open question in this document is exactly the lack of a real enterprise ontology for small-sample evaluation. Tuning it without a baseline is another guess.
 
-3. **纠正聚合成本体信号（收益最高）** —— **待做**。一个月里 37 个实体从 Product 挪到
-   Concept，该修的不是那 37 条，是 Product 的描述太松。Ontology 页加信号面板：
-   "Product → Concept 迁移 37 次（近 30 天）"，点开看样例，旁边"用 AI 起草更严格的描述"
-   ——与现有 misses 面板的 Suggest with AI 完全同构。
+3. **Aggregate corrections into ontology signals (highest return)** — **not done**. If 37 entities moved from Product to Concept in a month, the fix is not those 37 rows — it is that Product's description is too loose. Add a signal panel to the ontology page: "Product → Concept, 37 moves in the last 30 days," with sample entities, and a "draft a stricter description with AI" action next to it — the same shape as the existing "Suggest with AI" button on the misses panel.
 
-   > **数据源是 `audit_events`，不是 `entity_retypes`。** 人的纠正走两个动作：
-   > `entity.retyped`（实体面板直改，逐条）与 `ontology.refinement_approved`
-   >（审核队列批准，批次带 from/to/moved），两条都带 actor。
-   > `entity_retypes` 是**撤销台账**（批次作用域），拿它聚合会混进引擎自己的改类——
-   > 那读出来是「引擎在反复改主意」，不是「人在反复纠正你」。
+   > **The data source is `audit_events`, not `entity_retypes`.** A human correction happens through two actions: `entity.retyped` (a direct edit in the entity panel, one row at a time) and `ontology.refinement_approved` (approval in the review queue, a batch with a from/to move count); both carry an actor.
+   > `entity_retypes` is an **undo log** (scoped to a batch); aggregating from it would mix in retypes the engine made on its own — that would read as "the engine keeps changing its mind," not "a person keeps correcting you."
 
 ---
 
-### P5 · 推理机（远期）
+### P5 · Reasoning engine (long term)
 
-> **排期已由 [0002](0002-reasoning-engine.md) 取代**。本节列的"届时能消费什么"仍然成立，但顺序变了：0002 实测发现语料第一天就带 `part_of` 环（传递闭包在深度 5 起振荡不收敛），所以推理机的第一交付是**一致性检查**而非推导——同一套求值引擎反过来用，零风险，且现存 11 处矛盾立刻可查出。
+> **Superseded by the schedule in [0002](0002-reasoning-engine.md)**. What this section says the engine can eventually consume still holds, but the order changed: 0002 found that real text already contains a `part_of` cycle on day one (the transitive closure oscillates past depth 5 and never converges), so the reasoning engine's first delivery is **consistency checking**, not derivation — the same evaluation engine, run in the opposite direction, at zero risk, and it immediately surfaces 11 existing contradictions.
 
-`utopia-reason` 目前是 3 行空壳〔**已建成**，近两千行：R0 一致性检查与本体自检、R1 物化推导带开关，见 [0002](0002-reasoning-engine.md) 的修订〕。它上线后能消费的，正是 P2 保留而未投影的那些公理：
+`utopia-reason` is a 3-line empty shell today. (**Now built**, nearly 2,000 lines: R0 consistency checking and ontology self-checks, R1 materialized derivation behind a switch — see the [0002](0002-reasoning-engine.md) revision.) Once it ships, it can consume exactly the axioms P2 kept but never projected:
 
-- `TransitiveProperty` → "NVIDIA 名下所有东西"（现在只能靠 hops 逐跳猜）
-- 非 1 的基数被违反 → **一致性告警进 Review 队列**，本体成为数据质量规则
-- `someValuesFrom` / 类表达式 → 自动归类，实体无需显式标注类型
-- `equivalentClass` / `inverseOf` / 属性链 → 常规推理输入
-- `disjointWith` → 剪掉可证伪的跨类型合并候选（`resolution.rs:103` 的"类型漂移"逻辑会跨类型召回，这里能拦下不可能的组合）
+- `TransitiveProperty` → "everything under NVIDIA" (today only guessable by following hops one at a time)
+- A cardinality other than 1 violated → **a consistency alert goes to the Review queue**, turning the ontology into a data-quality rule
+- `someValuesFrom` and class expressions → automatic classification, with no explicit type needed on the entity
+- `equivalentClass`, `inverseOf`, and property chains → standard reasoning input
+- `disjointWith` → prune merge candidates that would cross incompatible types (the "type drift" logic in `resolution.rs:103` can retrieve across types; this lets it reject impossible combinations)
 
-**这些今天全部读不了，但 P2 的原文保真保证了届时无需用户重新上传。**
+**None of this can be read today, but keeping the raw source in P2 means no user needs to re-upload anything when it ships.**
 
-> **修订记录（2026-09-02）：大半已经读得了。** 投影落库的公理：`TransitiveProperty` / `SymmetricProperty` / `AsymmetricProperty` / `IrreflexiveProperty` / `FunctionalProperty` / `InverseFunctionalProperty` / `disjointWith` / `inverseOf` / `subPropertyOf`。
-> 仍在「暂未投影」里的：`equivalentClass`、`someValuesFrom` 与类表达式、属性链。
-> 上面五条的兑现情况：Transitive 进 R1 规则（带环检测与每谓词封顶）；基数违反进 `axiom_violations` 由 Review 裁；`equivalentClass` / 类表达式未做；`inverseOf` 与 `subPropertyOf` 进 R1（#177 / #179）；
-> **`disjointWith` 只兑现一半**——导入落了 `entity_type_disjoint`，消费者只有 R0 的本体自检（类不可满足），消解侧的 `classify_type_drift` 仍用硬编码的 `CONFUSABLE_TYPE_KEYS`，[0009](0009-no-type-is-a-type.md) 点名的「改从本体读」没做。
+> **Revision note (2026-09-02): most of it can be read today.** Axioms now projected into storage: `TransitiveProperty`, `SymmetricProperty`, `AsymmetricProperty`, `IrreflexiveProperty`, `FunctionalProperty`, `InverseFunctionalProperty`, `disjointWith`, `inverseOf`, `subPropertyOf`. Still "not yet projected": `equivalentClass`, `someValuesFrom` and class expressions, and property chains. Status of the five points above: Transitive feeds an R1 rule (with cycle detection and a per-predicate cap); cardinality violations go to `axiom_violations` for Review; `equivalentClass` and class expressions are not done; `inverseOf` and `subPropertyOf` feed R1 (#177, #179); **`disjointWith` is only half-delivered** — import stores `entity_type_disjoint`, but the only consumer is R0's ontology self-check (unsatisfiable classes); the resolution side, `classify_type_drift`, still uses a hardcoded `CONFUSABLE_TYPE_KEYS` list — [0009](0009-no-type-is-a-type.md) calls for reading this from the ontology instead, and that has not been done.
 
 ---
 
-## 开放问题
+## Open questions
 
-- **升格准确率给不出数**——需要真实企业本体做小样本评测，现在只有推演
-- **`active` 标记的定位**：原本当规模解药（错，规模应由 P3 的检索解），现在只剩治理用途（弃用的旧类不参与分配）。是否值得单独做，等有真实大本体再定
-- **阈值 30 是拍的**——类数超过多少才启用类型消解，需要实测校准〔这根轴不存在，换成了字符预算；新的待测量是每块 40 / 30 / 30，见 [0006](0006-ontology-scale-and-the-prompt.md)〕
-- **`disjointWith` 与 `SymmetricProperty` 收益中等**：前者剪枝防错误合并；后者去重（新语料里测得 8 对互为反向的重复事实，占 910 条的 1%）。排在 P2 之后按需〔Symmetric 已进 R0 检查与 R1 规则；disjointWith 进了本体自检，**消解侧剪枝仍未做**〕
+- **No accuracy number exists for auto-upgrade.** This needs small-sample evaluation on a real enterprise ontology; today we only have projections.
+- **The role of the `active` flag**: first meant as a fix for scale (wrong — scale should be solved by P3's retrieval), now used only for governance (a retired old type is excluded from assignment). Whether it deserves separate treatment waits for a real large ontology.
+- **The threshold of 30 was a guess** — how many types before type resolution should turn on needs measurement. (This axis no longer exists; it was replaced by a character budget. The new unmeasured numbers are 40/30/30 per chunk; see [0006](0006-ontology-scale-and-the-prompt.md).)
+- **`disjointWith` and `SymmetricProperty` bring moderate value**: the first prunes wrong merges; the second removes duplicates (measured 8 reversed-duplicate pairs in new text, 1% of 910 facts). Scheduled after P2, as needed. (Symmetric now feeds the R0 check and an R1 rule; `disjointWith` feeds the ontology self-check, but **pruning on the resolution side is still not done**.)
 
 ---
 
-## 基准语料
+## Benchmark corpus
 
-`Industry Corpus` 库保留着（NVIDIA 博客 18 篇 + 微软新闻室 10 篇，RSS 摄入），是上面所有数字的来源，也是后续所有评测的基线——改动前后跑同一个库，数字才可比。别在它上面做破坏性实验。
+The `Industry Corpus` base is kept (18 NVIDIA blog posts, 10 Microsoft newsroom posts, ingested by RSS). It is the source of every number above, and the baseline for future evaluation — run the same base before and after a change so the numbers stay comparable. Do not run destructive experiments on it.
 
-〔**2026-09-02**：基线已换。种子本体退场后这个库的起点不可复现，现在的基准是 `scripts/bench/` 上可重跑的语料，本体侧用 `ai-timeline-ends × schema.org + W3C Org`（[0012](0012-the-ontology-is-a-contract-not-a-suggestion.md)）。本文的数字仍是当时的真实测量，只是不再能与今天对比。〕
+(**2026-09-02**: the baseline has changed. After the seed ontology was retired, this base's starting point can no longer be reproduced. The current benchmark runs on the repeatable corpora in `scripts/bench/`, with the ontology side using `ai-timeline-ends × schema.org + W3C Org` ([0012](0012-the-ontology-is-a-contract-not-a-suggestion.md)). The numbers in this document are still real measurements from that time; they can no longer be compared with today's numbers.)
 
-分支状态不记在这里：git 自己知道，写进文档只会过期。
+Branch status is not recorded here: git already tracks it, and writing it here would only go stale.
