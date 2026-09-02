@@ -1994,15 +1994,16 @@ export function Graph() {
 
       {empty && (
         <div className="absolute inset-0 grid place-items-center pointer-events-none">
-          {/* 不放标题方块：页面本身就是图谱页，tab 条上也写着，
-              第三遍写"图谱"两个字不带任何信息。空状态该说的是下一步做什么 */}
+          {/* No title block here: this page is already the Graph page, and the tab
+              bar already says so. Writing "Graph" a third time adds no information.
+              An empty state should say what to do next. */}
           <div className="text-center text-sm text-neutral-500 max-w-xs">
             {S.graph.emptyBody}
           </div>
         </div>
       )}
 
-      {/* 底部居中悬浮时间岛 */}
+      {/* The floating time island, centered at the bottom. */}
       {edgeCount > 0 && (
         <TimeScrubber
           edges={data.data!.edges}
@@ -2013,7 +2014,8 @@ export function Graph() {
         />
       )}
 
-      {/* 实体侧栏。**取消选中之后还要多留 170ms**：那段时间它在演退场 */}
+      {/* The entity side rail. **Stays mounted 170ms after deselection** — that is
+          its exit animation playing out. */}
       {(selected || exiting) && kb && (
         <EntityPanel
           kbId={kb.id}
@@ -2021,7 +2023,8 @@ export function Graph() {
           exiting={!selected}
           onClose={deselect}
           onNavigate={(id) => {
-            // 跳转目标可能不在当前画布：同时把图 refocus 到它的邻域（与搜索选择一致）
+            // The jump target might not be on the current canvas: refocus the
+            // graph on its neighborhood too (matching the search-select behavior).
             setFocusEntity(id);
             setSelected(id);
           }}
@@ -2031,9 +2034,12 @@ export function Graph() {
   );
 }
 
-/* ============ 时间轴（底部居中悬浮岛：播放 + 密度带 + 拖动） ============ */
+/* ============ Timeline (the floating time island, bottom center: play,
+   density band, and drag) ============ */
 
-/** 轨道 clientX → 对齐天步进的时间值（数据精度即 day，拖动求精细；播放仍按月推进求节奏）。 */
+/** Converts a track clientX to a time value aligned to day steps (the data's
+ *  precision is day-level; dragging aims for that precision, while playback still
+ *  advances by month for a steady pace). */
 function scrubValueAt(
   clientX: number,
   track: HTMLDivElement | null,
@@ -2042,23 +2048,29 @@ function scrubValueAt(
 ): number {
   if (!track) return maxTs;
   const rect = track.getBoundingClientRect();
-  // 布局未成形（宽度 0）时避免除零产出 NaN
+  // Avoids a division by zero producing NaN when the layout has not settled
+  // (width is 0).
   if (rect.width < 1) return maxTs;
   const frac = Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
   const raw = minTs + frac * (maxTs - minTs);
   return Math.min(maxTs, minTs + Math.round((raw - minTs) / DAY_MS) * DAY_MS);
 }
 
-/** 播放/柱子的步长。**这两件事本来就该是同一个单位**——从前柱子按年、
- *  播放按天，界面上没有任何地方说得出「一格是多久」。 */
+/** The step size for playback and for each bar. **These two must be the same
+ *  unit** — an earlier version stepped bars by year and playback by day, and no
+ *  part of the interface could say "how long is one step." */
 type ScrubUnit = "year" | "month" | "day";
 
-/** 一根柱子最多画多少根。超过就把相邻的桶并起来画——**只影响画，不影响
- *  播放步长**：日单位下 15 年有五千多个桶，一根一像素也画不下，
- *  但播放仍然是一天一步。并了几个会在提示里说出来，不闷着 */
+/** The maximum number of bars to draw. Past this, adjacent buckets merge into one
+ *  bar. **This affects drawing only, not the playback step size**: at the day
+ *  unit, 15 years produce more than five thousand buckets, more than fit at one
+ *  pixel each, but playback still advances one day at a time. When bars merge, the
+ *  tooltip states how many — nothing is hidden. */
 const SCRUB_MAX_BARS = 220;
-/** 整条轨走完的目标时长。**与单位无关**——单位换的是颗粒度与密度，
- *  不该顺带把「等多久」也换掉：日单位若按「一天一拍」走，15 年要放二十分钟 */
+/** The target duration for playing through the whole track. **This does not
+ *  depend on the unit** — the unit changes granularity and density, and should not
+ *  also change how long a user waits. At the day unit, "one day per tick" would
+ *  take twenty minutes to cover 15 years. */
 const SCRUB_PLAY_MS = 18000;
 
 function bucketStart(ts: number, unit: ScrubUnit): number {
@@ -2086,25 +2098,31 @@ function TimeScrubber({
   edges: GraphEdge[];
   value: number | null;
   onChange: (v: number | null) => void;
-  /* 播放态由 Graph 持有：渲染层要区分播放推进与手动拖动 */
+  /* Playback state lives in Graph: the rendering layer must tell "advancing during
+     playback" apart from "manual drag." */
   playing: boolean;
   onPlayingChange: (v: boolean) => void;
 }) {
   const setPlaying = onPlayingChange;
-  /* 默认年：**大多数库跨度都以年计**，一进来先给能一眼看全的那一档 */
+  /* Defaults to year: **most knowledge bases span years**, so this gives a view
+     that fits on screen at a glance on entry. */
   const [unit, setUnit] = useState<ScrubUnit>("year");
-  /* 走完整条的次数。**拿它当 key**——同一个元素上重复触发同一个动画不会重播，
-     换 key 让它重新挂载才会 */
+  /* How many times playback has swept the whole track. **This is used as a key**
+     — repeating the same trigger on the same element does not replay an
+     animation; changing the key to force a remount does. */
   const [sweep, setSweep] = useState(0);
-  /* 指针在轨道上时，已走过的那段提亮。**它回答的是"我走到哪了"**——
-     不播的时候整条都是同一档灰，看不出进度停在哪；而这正是人把指针
-     移上来想知道的事 */
+  /* The lit-up segment behind the pointer while it sits on the track. **This
+     answers "how far have I gotten"** — without playback, the whole track is one
+     shade of gray with no sign of where progress stopped, and that is exactly what
+     a user wants to know when they move the pointer there. */
   const [trackHover, setTrackHover] = useState(false);
   const trackRef = useRef<HTMLDivElement>(null);
   const draggingRef = useRef(false);
-  /* 拖动落点。**播放循环有自己的浮点累加器**，不读 value——否则每帧的取整
-     误差会积起来。所以光改 value 是没用的，下一帧就被原样覆盖回去。
-     拖动把落点放进这里，循环下一帧接手，从新位置继续走 */
+  /* Where a drag landed. **The playback loop keeps its own floating-point
+     accumulator** and does not read value — otherwise rounding error would
+     accumulate every frame. So changing value alone has no effect; the next frame
+     would overwrite it unchanged. A drag writes its target here, and the loop
+     picks it up on its next frame, continuing from the new position. */
   const seekRef = useRef<number | null>(null);
   const seek = (v: number) => {
     seekRef.current = v;
@@ -2119,7 +2137,8 @@ function TimeScrubber({
     const min = froms.length
       ? Math.min(...froms)
       : now - 5 * 365 * 24 * 3600 * 1000;
-    // 起点对齐到单位边界：否则第一根柱子是半格，读起来像数据缺了一块
+    // Align the start to the unit boundary: otherwise the first bar is half a
+    // step, which reads as missing data.
     const start = bucketStart(min, unit);
 
     const counts = new Map<number, number>();
@@ -2131,7 +2150,8 @@ function TimeScrubber({
     for (let t = start; t <= now; t = bucketNext(t, unit))
       raw.push({ ts: t, n: counts.get(t) ?? 0 });
 
-    // 画不下就并桶。**并的是画，不是步长**
+    // Merge buckets when there is not enough room to draw them separately.
+    // **This merges the drawing, not the step size.**
     const group = Math.max(1, Math.ceil(raw.length / SCRUB_MAX_BARS));
     const cells: { ts: number; n: number }[] = [];
     for (let i = 0; i < raw.length; i += group) {
@@ -2143,13 +2163,17 @@ function TimeScrubber({
     }
     const peak = Math.max(1, ...cells.map((c) => c.n));
 
-    // 单位越大 → 桶越少 → 岛越短；越小 → 越长。**但下限要抬得够高**：
-    // 岛里那排固定控件（播放键 + 单位选择器 + 两个年份 + 日期 + All time/Now）
-    // 本身就要四百多像素，岛只有 320 时 flex-1 的轨道被压成 0——
-    // 实测柱子一根都看不见，整条是空的。
+    // A larger unit means fewer buckets, so the island shortens; a smaller unit
+    // means more buckets, so it lengthens. **But the minimum width must stay high
+    // enough**: the island's fixed row of controls (play button, unit selector,
+    // two years, a date, and All time/Now) already needs more than 400 pixels. At
+    // an island width of 320, the flex-1 track would compress to 0 — testing
+    // showed not a single bar visible, the whole track empty.
     //
-    // 抬高之后单位主要改变的是**每根柱子的粗细**：同一条轨道，
-    // 年是十几根粗块，日是两百多根细线。这比整条伸缩更说明问题
+    // With that floor raised, changing the unit mainly changes **how thick each
+    // bar is**: on the same track, year gives a dozen thick blocks, and day gives
+    // more than two hundred thin lines. That makes the change clearer than
+    // stretching the whole track.
     const w = Math.min(780, Math.max(660, 380 + cells.length * 2));
 
     return {
@@ -2161,18 +2185,22 @@ function TimeScrubber({
     };
   }, [edges, unit]);
 
-  // 播放按日推进（数据即 day 精度），日子快速翻过；整体节奏仍 ≈ 一个月/260ms。
-  // rAF 时间驱动：帧率无关，内部浮点累加避免取整漂移，值只在跨天时才下发
+  // Playback advances by day (the data's own precision), passing days quickly;
+  // the overall pace stays roughly one month per 260ms. Driven by rAF time, so it
+  // is frame-rate independent; an internal float accumulator avoids rounding
+  // drift, and the value is only pushed out when the day actually changes.
   useEffect(() => {
     if (!playing) return;
-    // 整条走完约 SCRUB_PLAY_MS，与单位无关；单位只决定落点取整到哪一格
+    // The whole track takes about SCRUB_PLAY_MS to play through, independent of
+    // the unit; the unit only decides which step the landing point rounds to.
     const SPEED = (maxTs - minTs) / SCRUB_PLAY_MS;
     let raf = 0;
     let last = performance.now();
     let acc = value ?? minTs;
     let lastPushed = 0;
     const step = (now: number) => {
-      // 有人拖过了：从落点接着走，而不是沿原来的轨迹
+      // If a drag happened, continue from its landing point instead of the
+      // original path.
       if (seekRef.current !== null) {
         acc = seekRef.current;
         seekRef.current = null;
@@ -2182,17 +2210,23 @@ function TimeScrubber({
       if (acc >= maxTs) {
         setPlaying(false);
         onChange(null);
-        // 走到头了扫一道光。**这是个收尾**——播放停下、时间跳回全时段，
-        // 没有交代的话看着像中途断了；一道光扫过说明"这条走完了"
+        // A sweep of light plays when playback reaches the end. **This is a
+        // closing signal** — playback stopping and time jumping back to all-time
+        // would look like it broke off midway without one; the sweep of light
+        // states clearly that "this track finished."
         setSweep((n) => n + 1);
         return;
       }
-      // **连续推进，不按桶跳。** 从前按 `bucketStart` 取整下发，年单位下
-      // 一次就是一年——播放头一格一格蹦，看着像卡顿而不是在走。
-      // 单位现在只管**显示**（标签精度、柱子跨度），不再管推进的步长。
+      // **Advance continuously; do not jump by bucket.** An earlier version
+      // rounded the pushed value through `bucketStart`, so at the year unit each
+      // step jumped a whole year — the playback head hopped step by step, which
+      // looked like stuttering rather than motion. The unit now controls only
+      // **display** (label precision, bar span), not the step size of playback.
       //
-      // 代价是下发变密（每帧一次），而每次下发都要重算全图的现行边，
-      // 所以限到 ~30fps：肉眼看不出与 60fps 的差别，重算量减半
+      // The cost is that pushes happen more often (once per frame), and every
+      // push recomputes the active edges for the whole graph, so this caps the
+      // rate at roughly 30fps: the eye cannot tell it apart from 60fps, and it
+      // halves the recompute load.
       if (now - lastPushed >= 33) {
         lastPushed = now;
         onChange(Math.round(acc));
@@ -2201,17 +2235,19 @@ function TimeScrubber({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-    // 只随播放开关重启：acc 在循环内自持，value 帧帧变不应重建循环
+    // This effect restarts only when playback toggles: acc persists inside the
+    // loop, so a value that changes every frame should not rebuild the loop.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [playing, minTs, maxTs, unit]);
 
-  // 展示到日：与数据的 day 级 valid_precision 对齐
+  // Displays down to the day, matching the data's day-level valid_precision.
   const label = (() => {
     if (value === null) return S.graph.allTime;
     const d = new Date(value);
     const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
     const dd = String(d.getUTCDate()).padStart(2, "0");
-    // 精度跟着单位：年单位下写出「2019-01-01」是假精确
+    // Precision follows the unit: writing "2019-01-01" at the year unit would be
+    // false precision.
     if (unit === "year") return `${d.getUTCFullYear()}`;
     if (unit === "month") return `${d.getUTCFullYear()}-${mm}`;
     return `${d.getUTCFullYear()}-${mm}-${dd}`;
@@ -2225,17 +2261,20 @@ function TimeScrubber({
     : undefined;
 
   return (
-    /* 宽度随单位变：单位大 → 桶少 → 短；单位小 → 桶多 → 长而密。
-       仍夹在视口内（calc 那一项），窄屏不会顶出去。
-       实测宽度：年 320 / 月 648 / 日 760。 */
+    /* Width changes with the unit: a larger unit means fewer buckets, so shorter;
+       a smaller unit means more buckets, so longer and denser. Still clamped to
+       the viewport (the calc term), so a narrow screen never overflows.
+       Measured widths: year 320, month 648, day 760. */
     <div
       className={`glass-strong absolute bottom-4 left-1/2 -translate-x-1/2 z-10 rounded-2xl px-3 py-2 flex items-center gap-2.5 shadow-[0_12px_40px_rgba(0,0,0,0.5)] u-scrub-island${playing ? " u-solid" : ""}`}
       style={{ width: `min(${trackW}px, calc(100vw - 4rem))` }}
     >
       <button
         onClick={() => {
-          // 已经在末端（`Now`）时按播放要从头来。**否则第一下等于没反应**：
-          // acc 起点就是终点，循环第一帧就判定播完，只把位置清成 All time
+          // Clicking play while already at the end (`Now`) restarts from the
+          // beginning. **Otherwise the first click would do nothing** — acc would
+          // start already at the end, and the loop's first frame would judge
+          // playback finished, only resetting the position to All time.
           if (
             !playing &&
             (value === null || value >= maxTs - (maxTs - minTs) * 0.02)
@@ -2249,13 +2288,15 @@ function TimeScrubber({
         {playing ? <Pause size={13} /> : <Play size={13} />}
       </button>
 
-      {/* 步长。**播放与柱子共用它**——从前柱子按年、播放按天，
-          界面上没有一处说得出「一格是多久」 */}
+      {/* The step size. **Playback and the bars share this setting** — an earlier
+          version stepped bars by year and playback by day, and no part of the
+          interface could state "how long is one step." */}
       <div
         title={S.graph.scrubUnitHint}
-        /* **与播放键同高同圆角**：那个键是 h-8 / rounded-lg，
-           而这里从前是 py-[3px] 撑出来的 20px 高、rounded-md——
-           并排放着两个尺寸和圆角都不一样的东西，看着不像一套 */
+        /* **Matches the play button's height and corner radius**: that button is
+           h-8 / rounded-lg, while this element used to be a 20px height from
+           py-[3px] with rounded-md — two elements side by side with different
+           sizes and corners looked like they did not belong to the same set. */
         className="flex h-8 shrink-0 items-center overflow-hidden rounded-lg border border-white/10"
       >
         {(["year", "month", "day"] as const).map((u) => (
@@ -2281,19 +2322,23 @@ function TimeScrubber({
         {minYear}
       </span>
 
-      {/* 密度带轨道：内嵌浅色井 + 每年事实量柱 */}
+      {/* The density-band track: an inset light well with a bar for each period's
+          fact count. */}
       <div
         ref={trackRef}
         onMouseEnter={() => setTrackHover(true)}
         onMouseLeave={() => setTrackHover(false)}
         className="relative h-9 min-w-[150px] flex-1 overflow-hidden rounded-lg bg-white/[0.04]"
       >
-        {/* 演完由 **React** 卸载，**别自己 `remove()`**。
-            从前是 `onAnimationEnd={(e) => e.currentTarget.remove()}`——
-            把 React 管着的节点从 DOM 里抠走，它自己并不知道。下一次扫光时
-            key 变了，React 去移除"旧节点"，而那个节点已经不在父节点里，
-            removeChild 抛 NotFoundError，未捕获的错误让整棵树卸载重挂：
-            现象就是**连播两轮之后界面像刷新了一次** */}
+        {/* **React** unmounts this when the animation finishes; **do not call
+            `remove()` manually.** An earlier version used
+            `onAnimationEnd={(e) => e.currentTarget.remove()}`, which pulled a
+            React-managed node out of the DOM without React knowing. On the next
+            sweep, the key changes and React tries to remove the "old node," which
+            is no longer inside its parent; removeChild throws NotFoundError, and
+            the uncaught error unmounts and remounts the whole tree. The visible
+            effect was **the interface looking like it refreshed after two
+            playback sweeps.** */}
         {sweep > 0 && (
           <span
             key={sweep}
@@ -2301,15 +2346,20 @@ function TimeScrubber({
             onAnimationEnd={() => setSweep(0)}
           />
         )}
-        {/* **间隙必须随密度收**：写死 2px 时，日单位下 216 根柱子有 215 个间隙
-            ≈ 430px，而轨道内宽才 ~455px——柱子被挤成 0.1px，整条看起来是空的。
-            实测就是这么丢的。柱子稀疏时留 2px 好数，密了就贴在一起当密度带看 */}
+        {/* **The gap must shrink as density rises**: a fixed 2px gap, at the day
+            unit with 216 bars, needs 215 gaps of about 430px total, while the
+            track's inner width is only about 455px — the bars would be squeezed
+            to 0.1px, and the whole track would look empty. Testing showed exactly
+            this failure. A sparse set of bars keeps a 2px gap for easy counting;
+            a dense set touches to read as a density band instead. */}
         <div
           className="absolute inset-x-1.5 top-1.5 bottom-1.5 flex items-end"
           style={{ gap: bars.length > 120 ? 0 : bars.length > 40 ? 1 : 2 }}
         >
           {bars.map((b) => {
-            // 进入即亮（桶起点为判据）：播放头脚下的柱子即已覆盖——进度条通用语义
+            // Lights up on entry (judged by the bucket's start time): the bar
+            // under the playback head is already covered — the common convention
+            // for a progress bar.
             const past = value !== null && b.ts <= value;
             const d = new Date(b.ts);
             const stamp =
@@ -2328,11 +2378,14 @@ function TimeScrubber({
                   className="w-full rounded-[1px] transition-colors"
                   style={{
                     height: `${Math.max(10, b.h * 100)}%`,
-                    // 播放中已扫过的提亮，停止后回到常规亮度。
-                    // **还没走到的压到近乎不可见**：它们本来是 0.09，
-                    // 在这个底色上仍看得清，于是播放头右边跟左边一样"亮着"，
-                    // 走到哪儿就看不出来了。留一点点而不是归零——
-                    // 归零等于假装那段没有数据，而它只是还没到
+                    // A bar already swept during playback brightens, then
+                    // returns to normal brightness when playback stops.
+                    // **A bar not yet reached dims to nearly invisible**: at its
+                    // original 0.09, it would still read clearly against this
+                    // background, so both sides of the playback head would look
+                    // equally "lit," and progress would be impossible to see. It
+                    // keeps a trace instead of zero — zero would claim that
+                    // period has no data, when it only has not arrived yet.
                     background:
                       value !== null && past && (playing || trackHover)
                         ? "rgba(255,255,255,0.62)"
@@ -2352,18 +2405,22 @@ function TimeScrubber({
           max={maxTs}
           step={DAY_MS}
           value={value ?? maxTs}
-          /* **拖动不停播**：拖是"我要看那一段"，不是"我要停下"——
-             松手之后应该从新位置继续走到底。
-             （`All time` / `Now` 那两个按钮仍然停：那是明确的跳转，不是擦洗） */
+          /* **Dragging does not stop playback**: a drag means "I want to see that
+             period," not "I want to stop" — releasing it should continue playing
+             through to the end from the new position.
+             (The `All time` and `Now` buttons still stop playback: those are
+             explicit jumps, not scrubbing.) */
           onChange={(e) => seek(Number(e.target.value))}
-          // 原生 range 的拖拽手势会被页面级鼠标监听（如图上拖节点）干扰——
-          // 自己用 pointer capture 驱动拖动，点击与拖拽都走同一条计算路径
+          // The native range input's drag gesture can be disrupted by page-level
+          // mouse listeners (such as dragging a node on the canvas) — this drives
+          // the drag itself with pointer capture, so a click and a drag both
+          // follow the same calculation path.
           onPointerDown={(e) => {
             draggingRef.current = true;
             try {
               e.currentTarget.setPointerCapture(e.pointerId);
             } catch {
-              /* 合成事件的 pointerId 可能无效，忽略 */
+              /* A synthetic event's pointerId can be invalid; ignore it. */
             }
             seek(scrubValueAt(e.clientX, trackRef.current, minTs, maxTs));
           }}
@@ -2390,7 +2447,8 @@ function TimeScrubber({
 
       <div className="h-5 w-px shrink-0 bg-white/10" />
 
-      {/* 双锚点分段：所处锚点高亮、点击即跳；拖在中间某天时两者皆不亮 */}
+      {/* A two-anchor segment: the current anchor highlights and a click jumps to
+          it; dragging to a day in between leaves neither highlighted. */}
       <div className="flex shrink-0 rounded-lg overflow-hidden border border-white/10">
         {(
           [
@@ -2428,15 +2486,19 @@ function TimeScrubber({
   );
 }
 
-/* ============ 实体侧栏 ============ */
+/* ============ Entity side rail ============ */
 
-/** 世界时间（这件事何时成立）→ 文本。**一律按 UTC 读，不转本地。**
+/** World time (when a fact holds) → text. **Always read in UTC; never convert to
+ *  local time.**
  *
- *  `valid_from` / `valid_to` 来自文档里的陈述（"2019 年 5 月 2 日就任"），
- *  是**日历日期不是时刻**，本来就没有时区；存的是那一天的 UTC 午夜。
- *  按本地渲染会让 UTC-5 的读者看到 2019-05-01——凭空差一天，而且差的方向
- *  还随读者所在地变。记录时间（我们何时这么认为）是另一回事，那个该按本地，
- *  见 EntityHistory 里 ymd 的注释。 */
+ *  `valid_from` and `valid_to` come from a statement in a document ("took office
+ *  on May 2, 2019"). This is **a calendar date, not a moment in time**, so it has
+ *  no time zone to begin with; it is stored as UTC midnight of that day.
+ *  Rendering in local time would show a UTC-5 reader 2019-05-01 — a day off with
+ *  no real cause, and the direction of the error would depend on the reader's
+ *  location. Recorded time (when we came to believe this) is a different matter,
+ *  and that one should render in local time; see the comment on ymd in
+ *  EntityHistory. */
 function fmtTime(iso: string | null, precision: string | null): string | null {
   if (!iso) return null;
   const d = new Date(iso);
@@ -2452,25 +2514,34 @@ function fmtInterval(f: EntityFact): string {
   if (f.temporal === "eternal") return "";
   const from = fmtTime(f.valid_from, f.valid_from_precision);
   const to = fmtTime(f.valid_to, f.valid_to_precision);
-  // **「结束了但不知哪天」绝不能显示成「至今」。** 那是这条改动要修的正脸：
-  // 原文明说 "former CEO of Weta Digital"，界面却告诉读者他还在任
+  // **"Ended, but the date is unknown" must never display as "ongoing."** This
+  // is the exact bug this change fixes: the source text stated "former CEO of
+  // Weta Digital," and the interface told the reader he still held the role.
   const endedUnknown = !f.valid_to && f.valid_to_precision === "unknown";
   if (!from && !to && !endedUnknown) return "";
   const end = to ?? (endedUnknown ? S.graph.endedUnknown : S.graph.ongoing);
   return from ? `${from} ~ ${end}` : `~ ${end}`;
 }
 
-/** 一条推出来的事实，**证明摊开在下面**。
+/** A derived fact, **with its proof laid out below it**.
  *
- * 不做折叠：这一档存在的全部理由就是「这条边不是谁说的，是这么来的」，
- * 把前提藏在一次点击后面等于把理由藏起来。链最长十二条，摊开也不长。 */
-/** 派生开关旁边那个小窗：**这批边是什么时候、按什么推出来的，以及现在还准不准**。
+ * There is no collapsing: the entire reason this row exists is "no one asserted
+ * this edge; here is how it was derived," and hiding the premises behind a click
+ * would hide that reason. A chain is at most twelve facts long, so laying it out
+ * flat stays short. */
+/** The small panel next to the derived-edges toggle: **when these edges were
+ * derived, from what, and whether they are still accurate now**.
  *
- * 存在的理由是「新鲜度看不见」。派生每小时重推一次，而事实每篇文档进来都在变——
- * 一条派生边看上去和它刚推出来的时候一模一样，可它依据的前提可能三分钟前刚被撤掉。
- * 光有开关答不了「我现在看到的是什么时候的结论」。
+ * The reason this panel exists is that freshness is otherwise invisible.
+ * Inference reruns every hour, while the underlying facts change with every
+ * document that comes in — a derived edge can look exactly like it did the
+ * moment it was derived, while a premise it depends on was retracted three
+ * minutes ago. The toggle alone cannot answer "as of when is this conclusion
+ * current."
  *
- * 手动按钮留在这里而不是别处：想重推的人正是刚看完这三行、觉得数字太旧的那个人。
+ * The manual re-run button lives here, not elsewhere: the person who wants to
+ * rerun inference is exactly the person who just read these three lines and
+ * decided the numbers look stale.
  */
 function DerivedPanel({
   panelRef,
@@ -2488,14 +2559,19 @@ function DerivedPanel({
     queryKey: ["kbOne", kbId],
     queryFn: () => api.kbDetail(kbId),
   });
-  /* 重跑要确认，但**确认的第二下必须落在另一个按钮上**。
-     这产品的手势约定是「同一个控件连点两下 = 收回去」——开关、⋯、图例胶囊
-     都是这么用的。把「再点一次就执行」压在同一个按钮上，等于让同一个手势
-     在这里意外地变成了「执行」，而别处它一直是「取消」。
-     所以点一下只是**问一句**，问句下面给 取消 / 跑 两个目标。
+  /* A re-run needs confirmation, but **the second click of that confirmation must
+     land on a different button.** This product's gesture convention is "clicking
+     the same control twice collapses it" — the toggle, the "…" button, and the
+     legend pills all follow this. Putting "click again to run" on the same
+     button would make that same gesture unexpectedly mean "run" here, when
+     everywhere else it means "cancel."
+     So one click only **asks a question**, and the question offers two separate
+     targets: cancel or run.
 
-     也没有用全站的 DangerConfirm：那是红标题、可要求逐字输入的危险级，
-     留给删库那类不可逆操作。重跑推理重但可重复，够不上那一档 */
+     This also does not use the site-wide DangerConfirm: that pattern is a red
+     title, sometimes requiring the user to type a confirmation word, reserved
+     for irreversible actions like deleting a knowledge base. Rerunning
+     inference is heavy but repeatable, and does not rise to that level. */
   const [armed, setArmed] = useState(false);
   const run = useMutation({
     mutationFn: () => api.runInference(kbId),
@@ -2508,29 +2584,35 @@ function DerivedPanel({
 
   const on = kb.data?.materialize_inferences ?? false;
   const last = kb.data?.last_inference_at;
-  // 「多久以前」比一个时间戳好读——问题是「新不新」，不是「几点」
+  // "How long ago" reads more clearly than a timestamp — the question is
+  // freshness, not the exact time.
   const age = last
     ? Math.round((Date.now() - new Date(last).getTime()) / 60000)
     : null;
 
-  // **盖在触发器原位往右上长开**（bottom-0 left-0），而不是在旁边挂一扇窗。
-  // 面与圆角跟通知/用户卡片对齐：u-menu-glass + rounded-xl
+  // **Covers the trigger's original position and grows up and to the right**
+  // (bottom-0 left-0), instead of opening a separate window beside it. The
+  // surface and corner radius match the alert and user cards: u-menu-glass +
+  // rounded-xl.
   return (
     <div
       ref={panelRef}
       className="u-menu-glass pointer-events-auto absolute bottom-0 left-0 z-50 w-72 overflow-hidden rounded-xl px-3 pb-3 pt-2.5 shadow-2xl"
     >
-      {/* items-center 而不是 baseline：标题旁边站着一个按钮和一个关闭键，
-          按基线对齐会让那两个看着往上飘 */}
+      {/* items-center, not baseline: a button and a close control sit next to the
+          title, and baseline alignment would make those two look like they float
+          upward. */}
       <div className="flex items-center gap-2">
         <span className="text-[13px] text-neutral-100">
           {S.graph.derivedPanel}
         </span>
         {!armed && (
           <button
-            /* **要长得像个按钮**：从前是一段灰色幽灵文字夹在标题与 × 之间，
-               读起来像第三个标题而不是一个动作。加边框 + 内距，
-               与右上角那个档位加减器同一档次要控件的样子 */
+            /* **This must look like a button.** An earlier version was a plain
+               gray ghost text sitting between the title and the × button, which
+               read like a third title rather than an action. Adding a border and
+               padding gives it the same visual weight as the level +/- control in
+               the top-right corner. */
             className="ml-auto rounded-md border border-white/10 px-2 py-0.5 text-[11px] text-neutral-400 transition-colors hover:border-white/20 hover:text-neutral-100"
             disabled={!on || run.isPending}
             title={on ? undefined : S.err.inference_off}
@@ -2539,8 +2621,9 @@ function DerivedPanel({
             {run.isPending ? S.graph.derivedRunning : S.graph.derivedRun}
           </button>
         )}
-        {/* 固定 18px 方格：**别让关闭键撑起标题行的高**——一撑高，
-            行里最矮的标题就被居中挤出上下空当，看着像上边距过大 */}
+        {/* A fixed 18px square: **the close button must not stretch the title
+            row's height** — if it did, the shorter title text would center
+            within that extra height and look like it has too much top margin. */}
         <button
           className={`${armed ? "ml-auto " : ""}grid h-[18px] w-[18px] place-items-center rounded text-neutral-500 transition-colors hover:bg-white/[0.06] hover:text-neutral-200`}
           onClick={onClose}
@@ -2550,8 +2633,9 @@ function DerivedPanel({
         </button>
       </div>
 
-      {/* 问句 + 两个目标。**取消排在前面**：从「跑」那一下移过来最先碰到的
-          是取消，误触的代价小的那个该更近 */}
+      {/* The question, with two targets. **Cancel comes first**: moving from the
+          "run" click, the pointer reaches cancel first, and the option with the
+          smaller cost of a mistake should sit closer. */}
       {armed && (
         <div className="mt-2 rounded-lg bg-white/[0.04] p-2">
           <p className="text-[11px] leading-relaxed text-neutral-300">
@@ -2599,8 +2683,9 @@ function DerivedPanel({
         </div>
       </dl>
 
-      {/* 上一次手动跑的结果留在这儿。**推出多少、作废多少要分开说**——
-          「什么都没变」和「换掉了三十条」是两件很不一样的事 */}
+      {/* The result of the last manual run stays here. **The number derived and
+          the number retracted are stated separately** — "nothing changed" and
+          "thirty facts were replaced" are two very different outcomes. */}
       {run.data && (
         <p className="mt-2 text-[11px] text-neutral-400">
           {run.data.inserted === 0 && run.data.invalidated === 0
@@ -2615,12 +2700,15 @@ function DerivedPanel({
   );
 }
 
-/** 推出来的一条边。**行式样与 FactRow 对齐**：同样的圆角行、同样的
- *  chevron 展开、同样的 role="link" 跳转（避免按钮套按钮）。
+/** One derived edge. **The row style matches FactRow**: the same rounded row,
+ *  the same chevron to expand, the same role="link" navigation (avoiding a
+ *  button nested inside a button).
  *
- *  从前这里是一张 `glass rounded-xl p-3` 卡片、证明常驻展开——在一列
- *  Relations/Timeline/History 的紧凑行里显得是另一个产品的东西，而且十几条
- *  推导堆起来是一面墙。证明是「问了才看」的东西，收进展开区正合适。 */
+ *  An earlier version used a `glass rounded-xl p-3` card with the proof always
+ *  expanded — inside a compact list of Relations/Timeline/History rows, that
+ *  looked like it belonged to a different product, and a dozen derivations
+ *  stacked up into a wall of text. Proof is something a reader asks for; putting
+ *  it behind an expandable section fits that. */
 function DerivedRow({
   d,
   otherId,
@@ -2669,8 +2757,9 @@ function DerivedRow({
           {d.premises.length}
         </span>
       </button>
-      {/* 证明：前提按推导顺序。**边框与 EvidenceList 同一档**——
-          两者是同一件事的两种形态：一个给出处，一个给推理链 */}
+      {/* The proof: premises in derivation order. **The border matches
+          EvidenceList's border** — the two are two forms of the same idea, one
+          giving a source, the other giving a chain of reasoning. */}
       {open && (
         <div className="mx-2 mb-2 mt-0.5 border-l border-white/15 pl-2.5">
           <ol className="space-y-0.5">
@@ -2700,7 +2789,8 @@ function EntityPanel({
 }: {
   kbId: string;
   entityId: string;
-  /** 正在演退场：还挂在 DOM 上，但已经不接受点击 */
+  /** Playing its exit animation: still mounted in the DOM, but no longer accepts
+   *  clicks. */
   exiting: boolean;
   onClose: () => void;
   onNavigate: (entityId: string) => void;
@@ -2710,12 +2800,14 @@ function EntityPanel({
     queryFn: () => api.entityDetail(kbId, entityId),
   });
   const [openFact, setOpenFact] = useState<string | null>(null);
-  // 推出来的那些。**单独一个键，不掺进 facts**——混在一个列表里，用户看不出
-  // 「文档里写的」和「引擎推的」的区别
+  // Derived facts. **A separate key, not mixed into facts** — mixing the two
+  // into one list would leave a user unable to tell "written in a document"
+  // apart from "derived by the engine."
   const derived = detail.data?.derived ?? [];
-  /* 按「方向 + 谓词 + 规则」分组，骨架与 Relations 的 groups 一致。
-     规则挂在组上而不是每一行：它对整组都成立，逐行重复既冗余，
-     那个琥珀色小字还会跟派生边抢色相 */
+  /* Grouped by "direction + predicate + rule," using the same structure as
+     Relations' groups. The rule attaches to the group, not to each row: it holds
+     for the whole group, so repeating it on every row would be redundant, and
+     that small amber label would also compete in hue with a derived edge. */
   const derivedGroups = useMemo(() => {
     const map = new Map<
       string,
@@ -2729,8 +2821,9 @@ function EntityPanel({
     >();
     for (const d of derived) {
       const direction = d.subject_id === entityId ? "out" : "in";
-      // 四条规则各有名字。**查不到就退回原始 kind 串**——那对读的人没有
-      // 意义，但比显示成另一条规则的名字诚实
+      // Each of the four rules has a name. **A missing lookup falls back to the
+      // raw kind string** — that string means nothing to a reader, but it is
+      // more honest than displaying the name of a different rule.
       const rule = S.graph.ruleNames[d.rule] ?? d.rule;
       const key = `${direction}|${d.predicate}|${d.rule}`;
       const cur = map.get(key);
@@ -2739,31 +2832,39 @@ function EntityPanel({
     }
     return [...map.values()];
   }, [derived, entityId]);
-  // Relations = 按关系分组（查关系）；Timeline = 有效时间轴（事情何时成立）；
-  // History = 记录时间轴（我们何时这么认为、又何时改了主意）
+  // Relations groups by relation (for browsing relations); Timeline shows the
+  // validity axis (when something held true); History shows the recording axis
+  // (when we came to believe it, and when we changed our mind).
   const [view, setView] = useState<
     "relations" | "timeline" | "history" | "derived"
   >("relations");
 
   const e: GraphNode | undefined = detail.data?.entity;
 
-  // 实体修正：抽取给的是初判，判错此前只能整库重抽
+  // Entity correction: extraction produces a first judgment, and before this
+  // feature existed, a wrong judgment could only be fixed by re-extracting the
+  // whole knowledge base.
   const qc = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [draftName, setDraftName] = useState("");
   const [draftType, setDraftType] = useState("");
-  // 同名的其他实体：详情接口打开就给。改名之后再用响应里的那份覆盖——
-  // 改完名可能撞上一批新的同名，那时候的答案比打开时的新
+  // Other entities sharing this name: the detail endpoint returns this on open.
+  // After a rename, this overrides that value with the response's own list —
+  // a rename can surface a new set of same-name matches, and that answer is
+  // newer than the one from when the panel opened.
   const [renamedPeers, setRenamedPeers] = useState<GraphNode[] | null>(null);
   const sameName = renamedPeers ?? detail.data?.same_name ?? [];
   const setSameName = setRenamedPeers;
-  // 手动合并：把同名的那个并进**当前这个**。方向写死是有意的——
-  // 用户正在看的就是他判断为「主」的那一个
+  // Manual merge: folds the same-name entity into **the one currently open**.
+  // This direction is fixed on purpose — the entity the user is looking at is
+  // the one they judged to be the "primary" one.
   const merge = useMutation({
     mutationFn: (source: string) => api.mergeEntities(kbId, source, entityId),
     onSuccess: () => {
       toast.success(S.toast.saved);
-      // 本地把并掉的那个摘掉，别等重取——它已经不存在了，留着会让人再点一次
+      // Removes the merged-away entity from the local list instead of waiting
+      // for a refetch — it no longer exists, and leaving it would invite a
+      // second click on it.
       setSameName((prev) =>
         (prev ?? sameName).filter((p) => p.id !== merge.variables),
       );
@@ -2773,7 +2874,8 @@ function EntityPanel({
     },
     onError: (err: Error) => toast.error(err.message),
   });
-  // 类型下拉要的是全量本体，不是当前视图里出现过的那几个
+  // The type dropdown needs the whole ontology, not only the classes that
+  // happen to appear in the current view.
   const ontology = useQuery({
     queryKey: ["ontology", kbId],
     queryFn: () => api.ontology(kbId),
@@ -2788,7 +2890,8 @@ function EntityPanel({
     setSameName([]);
     setEditing(true);
   };
-  // 本体是异步来的：它到齐时把类型下拉对到当前类型上
+  // The ontology arrives asynchronously: once it is available, align the type
+  // dropdown with the entity's current type.
   useEffect(() => {
     if (editing && !draftType && e)
       setDraftType(types.find((t) => t.key === e.type_key)?.id ?? "");
@@ -2807,7 +2910,8 @@ function EntityPanel({
       setEditing(false);
       setSameName(r.same_name);
       toast.success(S.graph.editSaved);
-      // 改了类型/名字，图谱节点与本体计数都要跟着动
+      // Changing the type or name must also update the graph node and the
+      // ontology's counts.
       qc.invalidateQueries({ queryKey: ["entity", kbId, entityId] });
       qc.invalidateQueries({ queryKey: ["graph", kbId] });
       qc.invalidateQueries({ queryKey: ["ontology", kbId] });
@@ -2820,8 +2924,10 @@ function EntityPanel({
     (draftName.trim() !== e.name ||
       draftType !== (types.find((t) => t.key === e.type_key)?.id ?? ""));
 
-  // Relations = 当下有效的快照（as-of now）；已闭合的历史只出现在 Timeline。
-  // 按「方向 + 谓词」分组：实体自身名不再逐行重复，谓词只出现在小节标题里
+  // Relations shows a snapshot valid as-of now; a closed historical fact
+  // appears only in Timeline. Grouped by "direction + predicate": the entity's
+  // own name no longer repeats on every row, and the predicate appears only in
+  // the section heading.
   const { groups, historicalCount } = useMemo(() => {
     const all = detail.data?.facts ?? [];
     const nowIso = new Date().toISOString();
@@ -2841,7 +2947,8 @@ function EntityPanel({
       }
     >();
     for (const f of current) {
-      // 谓词为空的事实归到同一组：它们的共同点就是「说不出是什么关系」
+      // Facts with an empty predicate fall into one group: what they share is
+      // that no relation could be named.
       const k = `${f.direction}:${f.predicate_key ?? ""}`;
       if (!map.has(k))
         map.set(k, {
@@ -2889,7 +2996,9 @@ function EntityPanel({
                   {e.name}
                 </span>
               </div>
-              {/* 消歧后缀找不到关联事实时兜底成类型标签，那就与后面的类型重复了 */}
+              {/* When no fact backs the disambiguator suffix, it falls back to
+                  the type label, which then duplicates the type shown next to
+                  it. */}
               <div className="mt-1 text-xs text-neutral-500">
                 {e.disambiguator && e.disambiguator !== e.type_label
                   ? `${e.disambiguator} · `
@@ -2976,7 +3085,9 @@ function EntityPanel({
         </div>
       )}
 
-      {/* 同名不是错误——两个张伟可以并存。只提示，判定是不是同一个是人的事 */}
+      {/* Sharing a name is not an error — two entities can both be named Zhang
+          Wei. This is only a hint; deciding whether they are the same thing is a
+          person's decision. */}
       {sameName.length > 0 && !editing && (
         <div className="mx-4 mt-2.5 rounded border border-white/10 bg-white/[0.03] px-2.5 py-2">
           <div className="flex items-start justify-between gap-2">
@@ -2991,9 +3102,11 @@ function EntityPanel({
               <X size={11} />
             </button>
           </div>
-          {/* 每个同名的给两个动作：去看它，或者把它并进来。
-              **方向写死成「并进当前这个」**——合并有方向（源消失、事实搬到目标上），
-              而当前打开的这个就是用户正在看、正在判断的那一个 */}
+          {/* Each same-name entity offers two actions: go look at it, or merge it
+              in. **The direction is fixed as "merge into the entity open now"**
+              — a merge has a direction (the source disappears; its facts move to
+              the target), and the entity open now is the one the user is
+              looking at and judging. */}
           <div className="mt-1.5 space-y-1">
             {sameName.map((p) => (
               <div key={p.id} className="flex items-center gap-1">
@@ -3023,12 +3136,13 @@ function EntityPanel({
         </div>
       )}
 
-      {/* 视图切换：Relations（分组）| Timeline（年表） */}
+      {/* View switch: Relations (grouped) | Timeline (chronological). */}
       <div className="px-4 pt-2.5">
         <div className="flex rounded-lg overflow-hidden border border-white/10 w-fit">
           {(["relations", "timeline", "history", "derived"] as const)
-            // 推出来的那一档：**没有派生就不出现**。一个没开推理的库不该看到
-            // 一个永远是空的标签页
+            // The Derived tab: **it does not appear when there is nothing
+            // derived.** A base with inference off should not see a tab that is
+            // always empty.
             .filter((v) => v !== "derived" || derived.length > 0)
             .map((v) => (
               <button
@@ -3119,10 +3233,12 @@ function EntityPanel({
             <p className="px-2 pb-1.5 pt-0.5 text-[11px] leading-relaxed text-neutral-500">
               {S.graph.derivedHint}
             </p>
-            {/* **与 Relations 同一个骨架**：方向箭头 + 谓词 + 条数的小标题，
-                底下是紧凑行。规则（传递/对称）并进标题——它对整组都成立，
-                挂在每一行上是重复，而且那个 `--u-warn` 琥珀色又是一处
-                与派生边抢色相的地方 */}
+            {/* **The same structure as Relations**: a direction arrow, a
+                predicate, and a count in a small heading, with compact rows
+                below. The rule (transitive/symmetric) attaches to the heading —
+                it holds for the whole group, so repeating it on every row would
+                be redundant, and that `--u-warn` amber color would also compete
+                in hue with a derived edge. */}
             {derivedGroups.map((gr) => (
               <div key={gr.key} className="mb-3 last:mb-1">
                 <div className="flex items-center gap-1.5 px-2 pb-1 pt-1.5 text-[10px] font-medium uppercase tracking-[0.08em] text-neutral-500">
@@ -3171,7 +3287,8 @@ function EntityPanel({
   );
 }
 
-/** 年表视图：带区间的事实按起点摊开成竖直时间线；无时间的沉到底部 undated。 */
+/** The timeline view: facts with an interval lay out as a vertical timeline by
+ *  start date; facts with no time sink to the bottom, under Undated. */
 function TimelineView({
   kbId,
   facts,
@@ -3236,7 +3353,8 @@ function TimelineView({
   );
 }
 
-/** 年表条目：区间 + 闭合方式标记 + 开放事实的最后确认时间；点击展开证据。 */
+/** A timeline entry: the interval, a marker for how it closed, and the last
+ *  confirmation time for an open-ended fact; clicking expands the evidence. */
 function TimelineRow({
   kbId,
   fact,
@@ -3327,7 +3445,8 @@ function TimelineRow({
   );
 }
 
-/** 字面值宾语的显示：属性 {value,unit} / 问数映射 {summary} / 其他 JSON 兜底。 */
+/** Displays a literal-valued object: an attribute as {value, unit}, a data
+ *  mapping as {summary}, and anything else falls back to raw JSON. */
 function fmtObjectValue(v: Record<string, unknown> | null): string | null {
   if (!v) return null;
   if (v.value !== undefined) {
@@ -3353,7 +3472,8 @@ function FactRow({
   onNavigate: (entityId: string) => void;
 }) {
   const interval = fmtInterval(fact);
-  // 与 Review 的低置信口径一致：只有低到需要怀疑才挂 chip，常规置信保持沉默
+  // Matches the same low-confidence threshold as Review: a chip appears only
+  // when confidence is low enough to doubt; normal confidence stays silent.
   const lowConfidence = fact.confidence < 0.75;
 
   return (
@@ -3415,7 +3535,8 @@ function FactRow({
   );
 }
 
-/** 证据展开区（FactRow 与 TimelineRow 共用）：quote + 跳原文 + 版本角标 + 置信。 */
+/** The evidence panel, shared by FactRow and TimelineRow: a quote, a link to
+ *  the source, a version badge, and confidence. */
 function EvidenceList({ kbId, fact }: { kbId: string; fact: EntityFact }) {
   const evidence = useQuery({
     queryKey: ["evidence", fact.id],
@@ -3431,9 +3552,12 @@ function EvidenceList({ kbId, fact }: { kbId: string; fact: EntityFact }) {
           search={{ chunk: ev.chunk_id }}
           className="block text-xs text-neutral-500 hover:text-neutral-300"
         >
-          {/* 原文说的谓词，只在它与事实行上显示的不同时才写出来。本体外的谓词
-              事实行上已经显示原文说法（0052），相同的话再写一遍是噪声；
-              一条事实有多种说法时（占 3%）这里才有话说 */}
+          {/* The source text's own wording for this predicate, written here only
+              when it differs from what the fact row already shows. For a
+              predicate outside the ontology, the fact row already shows the
+              source's own wording (migration 0052); writing the same wording
+              again would be noise. This shows up only when a fact has more than
+              one wording, which happens in about 3% of facts. */}
           {ev.proposed_predicate &&
             ev.proposed_predicate !== fact.predicate_key && (
               <div className="mb-0.5 text-[11px] text-neutral-400">
@@ -3459,7 +3583,8 @@ function EvidenceList({ kbId, fact }: { kbId: string; fact: EntityFact }) {
       {evidence.data?.evidence.length === 0 && (
         <p className="text-xs text-neutral-500">{S.graph.noEvidence}</p>
       )}
-      {/* 置信度只在低到值得怀疑时说话（与 Review 低置信口径一致），常规不标 */}
+      {/* Confidence is shown only when it is low enough to doubt (matching
+          Review's low-confidence threshold); normal confidence stays unmarked. */}
       {fact.confidence < 0.75 && (
         <p className="text-[10px] text-[var(--u-warn)]">
           {Math.round(fact.confidence * 100)}% {S.graph.confidence}
