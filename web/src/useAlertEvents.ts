@@ -1,7 +1,10 @@
-// 告警事件订阅。**全局，不按库**——顶栏角标是跨库的，而系统级告警根本没有库。
+// Alert event subscription. **This is global, not per-KB.** The top-bar
+// badge spans all KBs, and a system-level alert has no KB at all.
 //
-// 服务端推的那条不带任何数据也不判权限（见 alerts_routes::stream）：收到就重取，
-// 谁能看见什么由列表查询说了算。所以这里也不需要知道当前是哪个库。
+// The server-pushed event carries no data and applies no permission check
+// (see alerts_routes::stream). On receipt, the client refetches, and the
+// list query decides what each user can see. So this code does not need
+// to know the current KB.
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 

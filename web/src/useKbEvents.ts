@@ -1,5 +1,7 @@
-// KB 事件流订阅：收到事件只做 react-query 失效重取（事件不带业务数据，天然幂等）。
-// EventSource 断线自动重连；替代 Library/Review 的轮询。
+// KB event stream subscription: on each event, this only invalidates and
+// refetches react-query data. Events carry no business data, so retries
+// are naturally idempotent. EventSource reconnects on its own after a
+// disconnect. This replaces polling in Library and Review.
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 
