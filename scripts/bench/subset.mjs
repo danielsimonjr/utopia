@@ -1,39 +1,48 @@
 #!/usr/bin/env node
-// 把 schema.org 的 TTL 切成前 N 个类的子集，给退化曲线用。
+// This cuts the schema.org TTL file down to a subset of the first N classes, for the
+// degradation curve.
 //
-// 曲线要回答的是：**内联多少词汇量之后抽取开始掉东西**。那条曲线定
-// `ONTOLOGY_PROMPT_BUDGET` 与每块检索多少个候选，不测就是拍脑袋。
+// The curve answers one question: **how much vocabulary can extraction inline before
+// it starts dropping facts?** That curve sets `ONTOLOGY_PROMPT_BUDGET` and the number
+// of candidates retrieved per chunk. Without this measurement, those values are a guess.
 //
-// 为什么不用"导入全量再限制内联数"：那样量到的是"检索选得准不准"，
-// 混进了检索的质量。切子集 + 全量内联，量的才是纯粹的规模效应。
+// This does not import the full vocabulary and then limit the inline count, because
+// that approach would measure how well retrieval selects candidates, mixing in
+// retrieval quality. Cutting a subset and inlining all of it measures pure scale
+// effects instead.
 //
-// 用法：node scripts/bench/subset.mjs /tmp/schemaorg.ttl 100 > /tmp/schemaorg-100.ttl
+// Usage: node scripts/bench/subset.mjs /tmp/schemaorg.ttl 100 > /tmp/schemaorg-100.ttl
 
 import fs from "node:fs";
 
 const [, , src, nRaw] = process.argv;
 const N = Number(nRaw);
 if (!src || !Number.isFinite(N)) {
-  console.error("用法: subset.mjs <schemaorg.ttl> <类数>");
+  console.error("Usage: subset.mjs <schemaorg.ttl> <class count>");
   process.exit(2);
 }
 
 const text = fs.readFileSync(src, "utf8");
 const lines = text.split("\n");
 
-// 前缀块原样保留：切掉它文件就解析不了
+// This keeps the prefix block unchanged. Cutting it would break parsing of the file.
 const prefixEnd = lines.findIndex((l) => l.startsWith("@prefix") === false && l.trim() && !l.startsWith("#"));
 const prefixes = lines.slice(0, prefixEnd).join("\n");
 
-// 按空行分块，但**必须知道自己在不在三引号字符串里**。
+// This splits the file into blocks at blank lines, but **it must track whether it is
+// inside a triple-quoted string.**
 //
-// 前两版都栽在这上面。按 `/\.\s*$/` 收尾不行：schema.org 的 rdfs:comment 里
-// 有以句点结尾的行，块从描述中间被劈开（导入报 `Accountancy is not a valid
-// subject`）。改按空行也不行：`"""…"""` 里也有真正的空行，同样劈开
-//（`A is not a valid subject`，"A" 是 BreadcrumbList 那段描述的第一个词）。
+// Two earlier versions of this script failed here. Splitting on a line ending in
+// `/\.\s*$/` did not work: some schema.org rdfs:comment values end in a line that ends
+// with a period, so a block split apart in the middle of a description, and import
+// reported `Accountancy is not a valid subject`. Splitting on blank lines alone also
+// did not work: a `"""…"""` string can contain a real blank line, which split a block
+// apart the same way, and import reported `A is not a valid subject`, where "A" was
+// the first word of the BreadcrumbList description.
 //
-// TTL 里没有词法上下文就切不动这个文件——数一下 `"""` 出现过几次，
-// 偶数才算在字符串外面。
+// Splitting this file correctly requires tracking this lexical context: this counts
+// how many `"""` markers have appeared, and treats the position as outside a string
+// only when that count is even.
 const blocks = [];
 {
   let cur = [];
@@ -55,13 +64,15 @@ const subjectOf = (b) => (b.match(/^\s*(\S+)\s+a\s/m) || [])[1] || "";
 const isClass = (b) => /\ba\s+rdfs:Class\b/.test(b);
 const isProp = (b) => /\ba\s+rdf:Property\b/.test(b);
 
-// 取前 N 个类。**保序而不是随机取**：同一个 N 每次得到同一份子集，
-// 两次跑出的差别才归因得到别处
+// This takes the first N classes. **It keeps the original order instead of choosing
+// randomly,** so the same N always produces the same subset, and a difference between
+// two runs can be attributed to something other than the subset.
 const classes = blocks.filter(isClass);
 const keep = new Set(classes.slice(0, N).map(subjectOf).filter(Boolean));
 
-// 属性：domainIncludes 落在保留的类里就留。留下指向被切掉的类的属性没有意义
-//——那些 domain 解析不出来，导入时本来就会被跳过
+// Keeps a property when its domainIncludes value falls inside a kept class. Keeping a
+// property that points to a cut class serves no purpose, because that domain would
+// not resolve, and import would skip it anyway.
 const props = blocks.filter(isProp).filter((b) => {
   const m = b.match(/schema:domainIncludes([^;.]*)/);
   if (!m) return false;
@@ -73,4 +84,4 @@ const props = blocks.filter(isProp).filter((b) => {
 
 const kept = blocks.filter((b) => isClass(b) && keep.has(subjectOf(b)));
 process.stdout.write(prefixes + "\n\n" + kept.concat(props).join("\n\n") + "\n");
-process.stderr.write(`保留 ${kept.length} 个类、${props.length} 个属性\n`);
+process.stderr.write(`Kept ${kept.length} classes and ${props.length} properties\n`);
