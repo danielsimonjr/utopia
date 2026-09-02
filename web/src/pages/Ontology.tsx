@@ -1,6 +1,8 @@
-// 本体编辑器：master-detail 双栏（与 Library 的 SourcesRail 同构）。
-// 左栏 = filter + Classes/Properties 两小节 + 底部 Unmatched 入口；
-// 右侧 = 选中项的表单 / 未匹配信号面板 / 概览。
+// The ontology editor: a master-detail two-column layout, the same structure as the
+// SourcesRail in Library.
+// The left column holds a filter, the Classes and Properties sections, and the
+// Unmatched entry point at the bottom. The right side shows the form for the selected
+// item, the unmatched signals panel, or the overview.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
@@ -44,22 +46,23 @@ import {
   pageSlice,
 } from "../ui";
 
-/** 左栏行高（py-1.5 + 13px 文字 + space-y 间隙）与底部预留（新建行 + 分页器） */
+/** The left rail's row height (py-1.5 plus 13px text plus the space-y gap), and the
+ * space reserved at the bottom for the new-item row and the pager. */
 const RAIL_ROW_H = 34;
 const RAIL_RESERVED = 80;
-/** 兜底页行数（首帧未量到高度时用） */
+/** The fallback row count, used before the first frame measures the height. */
 const RAIL_PAGE = 14;
-/** 过滤模式两节混排时每节的行数 */
+/** The row count per section, when the filter mixes both sections together. */
 const RAIL_PAGE_MIXED = 6;
 
-/** 右侧详情区当前展示什么 */
+/** What the right-side detail area shows. */
 type Sel =
   | { kind: "class"; id: string }
   | { kind: "relation"; id: string }
   | { kind: "new-class"; parentId: string | null }
   | { kind: "new-relation" }
   | { kind: "misses" }
-  // 类型消解：把「大致对」的类换成更具体的那个
+  // Type refinement: replaces a roughly-right class with a more specific one.
   | { kind: "refine" }
   | { kind: "import" }
   | null;
@@ -71,7 +74,8 @@ export function Ontology() {
   const [railTab, setRailTab] = useState<"classes" | "properties">("classes");
   const [filter, setFilter] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
-  // 每页行数按列表区实际高度动态算：窗口多高铺多满，不滚动也不留大空
+  // Calculates rows per page from the list area's actual height, so the list fills the
+  // window height, with no scrolling and no large empty space.
   const listRef = useRef<HTMLDivElement>(null);
   const [railRows, setRailRows] = useState(RAIL_PAGE);
   useEffect(() => {
@@ -94,7 +98,7 @@ export function Ontology() {
 
   const refresh = () =>
     queryClient.invalidateQueries({ queryKey: ["ontology", kb?.id] });
-  // 错误统一走全局 toast，不再用页面内嵌错误行
+  // Every error goes through the global toast. No error line is embedded in the page.
   const onError = (e: unknown) => toast.error((e as Error).message);
 
   if (!kb) return <Loading>{S.nav.loading}</Loading>;
@@ -102,7 +106,8 @@ export function Ontology() {
   if (data.isError) return <Loading>{(data.error as Error).message}</Loading>;
 
   const { entity_types, relation_types, misses, dismissed_misses } = data.data;
-  // 属性不进 Properties 列表：它们挂在类下，在类详情区编辑
+  // An attribute does not appear in the Properties list. It belongs to a class, and the
+  // user edits it in the class detail area.
   const relations = relation_types.filter((r) => r.kind !== "attribute");
   const selectedClass =
     sel?.kind === "class"
@@ -115,7 +120,7 @@ export function Ontology() {
 
   return (
     <div className="h-full flex">
-      {/* 左栏：filter + 两小节 + Unmatched */}
+      {/* The left rail: a filter, two sections, and Unmatched. */}
       <aside className={`${RAIL_CLS} flex flex-col`}>
         <div className="px-3 pt-3 pb-2.5">
           <div className="relative">
@@ -131,8 +136,10 @@ export function Ontology() {
             />
           </div>
         </div>
-        {/* 分段切换：与登录页模式切换/日程选择器同一语汇（bg-white/5 容器 + 激活反白）；
-            过滤时列表例外：两节混排同时给出命中 */}
+        {/* This segmented switch uses the same style as the login page mode switch and
+            the schedule picker: a bg-white/5 container with an inverted-color active
+            state. When a filter is active, this rule has an exception: the list mixes
+            both sections and shows matches from both at once. */}
         <div className="mx-3 mb-1 flex gap-1 rounded-lg bg-white/5 p-1">
           {(
             [
@@ -158,7 +165,8 @@ export function Ontology() {
           ref={listRef}
           className="flex-1 min-h-0 overflow-hidden px-2 pt-1.5 pb-2 flex flex-col"
         >
-          {/* 新建行置顶：随当前段建类/建关系 */}
+          {/* The new-item row stays at the top. It creates a class or a relation,
+              depending on the current section. */}
           {!filter.trim() && (
             <button
               onClick={() =>
@@ -224,7 +232,8 @@ export function Ontology() {
             />
           )}
         </div>
-        {/* 底部常驻：两个"关于本体"的入口——从外部拿一份本体，或看抽取顶回来的信号 */}
+        {/* Two fixed entries about the ontology as a whole: importing an ontology from
+            an outside source, or reviewing signals that extraction rejected. */}
         <button
           onClick={() => setSel({ kind: "import" })}
           className={cn(
@@ -237,9 +246,11 @@ export function Ontology() {
           <Upload size={14} className="text-neutral-500" />
           <span>{S.ontology.importShort}</span>
         </button>
-        {/* 类型消解：把「大致对」的类换成更具体的那个。**紧挨着未匹配**——
-            两者都是「本体与数据对不齐」的处置，只是方向相反：那个是本体缺东西，
-            这个是本体有更好的选项没被用上 */}
+        {/* Type refinement replaces a roughly-right class with a more specific one.
+            **This sits next to Unmatched.** Both handle a mismatch between the ontology
+            and the data, but in opposite directions: Unmatched means the ontology is
+            missing something, while refinement means the ontology has a better option
+            that extraction did not use. */}
         <button
           onClick={() => setSel({ kind: "refine" })}
           className={cn(
@@ -252,7 +263,8 @@ export function Ontology() {
           <Wand2 size={14} className="text-neutral-500" />
           <span>{S.ontology.refineShort}</span>
         </button>
-        {/* 底部常驻：抽取未匹配信号（有存量时带数量徽标） */}
+        {/* A fixed entry for signals that extraction did not match. It shows a count
+            badge when any are pending. */}
         <button
           onClick={() => setSel({ kind: "misses" })}
           className={cn(
@@ -272,9 +284,11 @@ export function Ontology() {
         </button>
       </aside>
 
-      {/* 右侧：详情。选中类时表单 + 实例列表双栏铺开，提高宽屏利用率 */}
+      {/* The right side: the detail area. When a class is selected, the form and the
+          instance list spread across two columns, to use a wide screen well. */}
       <div className="flex-1 min-w-0 overflow-y-auto u-scroll px-8 py-6">
-        {/* 放宽到 6xl 供三列铺开；misses/关系/概览各自带 max-w-xl 内衬不受影响 */}
+        {/* This widens to 6xl to fit three columns. The misses, relation, and overview
+            views each keep their own max-w-xl padding, unaffected by this. */}
         <div className="max-w-6xl">
           {sel?.kind === "import" ? (
             <div className="max-w-xl">
@@ -295,7 +309,9 @@ export function Ontology() {
               />
             </div>
           ) : sel?.kind === "new-class" || selectedClass ? (
-            /* lg 两列（表单 | 属性+实例堆叠）；xl 三列并排（包装器 xl:contents 解散入栅格） */
+            /* At the lg breakpoint, this is two columns: the form, then attributes and
+               instances stacked. At xl, it becomes three columns side by side (the
+               xl:contents wrapper dissolves into the grid). */
             <div className="grid gap-4 items-start lg:grid-cols-[minmax(0,24rem)_minmax(0,1fr)] xl:grid-cols-[minmax(0,22rem)_minmax(0,1fr)_minmax(0,1fr)]">
               <div className="glass rounded-xl p-4">
                 <ClassForm
@@ -321,7 +337,8 @@ export function Ontology() {
                       : undefined
                   }
                   onDone={(createdId) => {
-                    // 新建成功即选中它：立刻能看到、能继续编辑
+                    // On a successful create, this selects the new item, so the user
+                    // can see it and keep editing right away.
                     if (sel?.kind === "new-class")
                       setSel(
                         createdId ? { kind: "class", id: createdId } : null,
@@ -331,7 +348,8 @@ export function Ontology() {
                   onError={onError}
                 />
               </div>
-              {/* lg 右列堆叠属性+实例；xl 解散为两个独立栅格列 */}
+              {/* At lg, the right column stacks attributes and instances. At xl, this
+                  dissolves into two separate grid columns. */}
               {selectedClass && (
                 <div className="grid gap-4 items-start xl:contents">
                   <AttributesCard
@@ -368,7 +386,7 @@ export function Ontology() {
               />
             </div>
           ) : (
-            /* 概览：未选中任何条目 */
+            /* The overview, shown when no item is selected. */
             <div className="glass rounded-xl p-6 max-w-xl">
               <PageTitle className="mb-1">{S.ontology.title}</PageTitle>
               <p className="text-xs text-neutral-500 u-num">
@@ -388,7 +406,7 @@ export function Ontology() {
   );
 }
 
-/* ---------- 实例列表：选中类的实体（服务端分页，点击进图谱） ---------- */
+/* ---------- Instance list: entities of the selected class, server-paged, click to open the graph ---------- */
 
 function InstancesCard({ kbId, type }: { kbId: string; type: EntityTypeView }) {
   const PER = 12;
@@ -400,7 +418,7 @@ function InstancesCard({ kbId, type }: { kbId: string; type: EntityTypeView }) {
   });
   const total = q.data?.total ?? 0;
   const rows = q.data?.entities ?? [];
-  if (!q.isPending && total === 0) return null; // 没有实例时不占版面
+  if (!q.isPending && total === 0) return null; // Takes no layout space when there are no instances.
 
   return (
     <div className="glass rounded-xl p-4">
@@ -435,7 +453,7 @@ function InstancesCard({ kbId, type }: { kbId: string; type: EntityTypeView }) {
   );
 }
 
-/* ---------- 属性卡片：选中类的字面值字段（行内增改删） ---------- */
+/* ---------- Attributes card: literal-value fields of the selected class, added, edited, and deleted inline ---------- */
 
 function AttributesCard({
   kbId,
@@ -450,7 +468,7 @@ function AttributesCard({
   onChanged: () => void;
   onError: (e: unknown) => void;
 }) {
-  // 行内编辑：一次只展开一行（属性 id 或 "new"）
+  // Inline editing: only one row expands at a time, identified by attribute id or "new".
   const [editing, setEditing] = useState<string | null>(null);
   useEffect(() => setEditing(null), [type.id]);
 
@@ -553,7 +571,9 @@ function AttributeForm({
   const [label, setLabel] = useState(existing?.label ?? "");
   const [datatype, setDatatype] = useState(existing?.datatype ?? "text");
   const [unit, setUnit] = useState(existing?.unit ?? "");
-  // 单值 = functional：新值经时态引擎闭合旧值（属性历史的来源）。多数属性如此，默认开
+  // A single value means functional: a new value closes the old value through the
+  // temporal engine, which is the source of attribute history. Most attributes work
+  // this way, so this defaults to on.
   const [single, setSingle] = useState(existing?.functional ?? true);
   const [description, setDescription] = useState(existing?.description ?? "");
 
@@ -703,9 +723,9 @@ function AttributeForm({
   );
 }
 
-/* ---------- 左栏小节头 ---------- */
+/* ---------- Left rail section headers ---------- */
 
-/* ---------- 类层级树（可折叠；filter 时拍平） ---------- */
+/* ---------- Class hierarchy tree, collapsible, flattened when a filter is active ---------- */
 
 function ClassTree({
   types,
@@ -727,7 +747,7 @@ function ClassTree({
   const rows = useMemo(() => {
     const q = filter.trim().toLowerCase();
     if (q) {
-      // filter 模式：拍平命中项（label/key 都参与匹配）
+      // Filter mode: flattens the matching items. Both label and key match.
       return types
         .filter(
           (t) =>
@@ -755,7 +775,7 @@ function ClassTree({
     return out;
   }, [types, filter, collapsed]);
 
-  // 半屏分页：过滤词变化回第一页
+  // Half-screen paging: a filter change resets to the first page.
   const [page, setPage] = useState(0);
   useEffect(() => setPage(0), [filter]);
   const { rows: paged, safe } = pageSlice(rows, page, pageSize);
@@ -774,7 +794,8 @@ function ClassTree({
               : "hover:bg-white/[0.05] text-neutral-400 hover:text-neutral-200",
           )}
         >
-          {/* 折叠柄：有子类才渲染，点击不选中 */}
+          {/* The collapse handle. It renders only when the class has children, and
+              clicking it does not select the row. */}
           {hasChildren ? (
             <span
               onClick={(e) => {
@@ -794,12 +815,15 @@ function ClassTree({
           ) : (
             <span className="w-3 shrink-0" />
           )}
-          {/* 方形是直角：与圆形拉开区分度（图谱节点同理） */}
+          {/* A square has right angles, to stand apart from a circle. The graph nodes
+              use the same distinction. */}
           <span
             className={`h-2.5 w-2.5 shrink-0 ${t.shape === "square" ? "" : "rounded-full"}`}
             style={{ background: t.color }}
           />
-          {/* 不在列表里放逐项用量读数：数量级上来后统计和渲染都是负担，用量看表单 */}
+          {/* This list does not show a usage count per item. At scale, computing and
+              rendering that count for every row is expensive; the user checks usage
+              in the form instead. */}
           <span className="truncate">{t.label}</span>
         </button>
       ))}
@@ -813,7 +837,7 @@ function ClassTree({
   );
 }
 
-/* ---------- 关系列表 ---------- */
+/* ---------- Relation list ---------- */
 
 function PropertyList({
   relations,
@@ -835,7 +859,7 @@ function PropertyList({
           r.label.toLowerCase().includes(q) || r.key.toLowerCase().includes(q),
       )
     : relations;
-  // 半屏分页：过滤词变化回第一页
+  // Half-screen paging: a filter change resets to the first page.
   const [page, setPage] = useState(0);
   useEffect(() => setPage(0), [filter]);
   const { rows: paged, safe } = pageSlice(rows, page, pageSize);
@@ -853,7 +877,8 @@ function PropertyList({
               : "hover:bg-white/[0.05] text-neutral-400 hover:text-neutral-200",
           )}
         >
-          {/* 前导只留折叠柄槽：文字起点对齐类行"标识点"的左端 */}
+          {/* This leaves only the collapse-handle slot at the start, so the text
+              aligns with the left edge of a class row's marker dot. */}
           <span className="w-3 shrink-0" />
           <span className="truncate">{r.label}</span>
           {r.functional && <Chip tone="info">1:1</Chip>}
@@ -869,9 +894,11 @@ function PropertyList({
   );
 }
 
-/* ---------- 类表单 ---------- */
+/* ---------- Class form ---------- */
 
-/** 父类下拉的候选：树序 + 缩进（层级可见），排除自己与全部后代（防成环）。 */
+/** The candidates for the parent-class dropdown, in tree order with indentation to
+ * show the hierarchy. This excludes the class itself and all its descendants, to
+ * prevent a cycle. */
 function parentOptions(
   allTypes: EntityTypeView[],
   selfId: string | undefined,
@@ -879,7 +906,8 @@ function parentOptions(
   const excluded = new Set<string>();
   if (selfId) {
     excluded.add(selfId);
-    // 收后代：反复扫描直到收敛（类的数量级很小，O(n²) 无所谓）
+    // Collects all descendants by scanning repeatedly until nothing changes. The number
+    // of classes is small, so an O(n²) scan is fine.
     let grew = true;
     while (grew) {
       grew = false;
@@ -922,16 +950,18 @@ function ClassForm({
   existing: EntityTypeView | null;
   parentId: string | null;
   allTypes: EntityTypeView[];
-  /** 编辑已有类时提供：以当前类为父级新建子类 */
+  /** Provided when editing an existing class: creates a subclass with this class as parent. */
   onNewSub?: () => void;
-  /** 创建成功时携带新 id，编辑成功时为 undefined */
+  /** Carries the new id on a successful create; undefined on a successful edit. */
   onDone: (createdId?: string) => void;
   onError: (e: unknown) => void;
 }) {
   const [key, setKey] = useState(existing?.key ?? "");
   const [label, setLabel] = useState(existing?.label ?? "");
-  // 新建时颜色跟着 key 走（与后端 color_for_key 同一个规则），不是一个固定默认值。
-  // 用户当然可以改；但**不改的话，手动建的类和导入建的类配色体系一致**
+  // For a new class, the color follows the key, using the same rule as the server's
+  // color_for_key function, not a fixed default. The user can change it. **If the user
+  // does not change it, a manually created class matches the color scheme of an
+  // imported class.**
   const [color, setColor] = useState(
     existing?.color ?? colorForKey(existing?.key ?? ""),
   );
@@ -943,11 +973,14 @@ function ClassForm({
     existing?.parents ?? (parentId ? [parentId] : []),
   );
   const [description, setDescription] = useState(existing?.description ?? "");
-  // 互斥：声明「不可能同时是」。一致性检查据此报不可满足的类（0002）——
-  // 一个类继承了两个互斥的祖先，就永远不可能有实例，而它不报错，只是永远空着
+  // Disjoint classes declare "cannot be both at once". The consistency check uses this
+  // to report an unsatisfiable class (see decision 0002). A class that inherits from
+  // two disjoint ancestors can never have an instance. This state raises no error; the
+  // class simply stays empty forever.
   const [disjoint, setDisjoint] = useState<string[]>(existing?.disjoint ?? []);
 
-  // 从左栏点"+ 子类"进来时预填那个父。多父下它是第一个，也就是主父
+  // Pre-fills the parent when the user arrives from "+ subclass" in the left rail. With
+  // multiple parents, this one is first, so it becomes the primary parent.
   useEffect(() => setParents(parentId ? [parentId] : []), [parentId]);
 
   const save = useMutation({
@@ -996,7 +1029,8 @@ function ClassForm({
         <span className="font-bold text-neutral-100">
           {existing?.label ?? S.ontology.newClass}
         </span>
-        {/* key 是纯技术标识：已存在时干脆不展示，只在创建时输入 */}
+        {/* The key is a plain technical identifier. This shows it only during creation
+            and not for an existing class. */}
         {existing?.builtin && <Chip tone="neutral">{S.ontology.builtin}</Chip>}
         {existing && (
           <span className="ml-auto text-xs text-neutral-500">
@@ -1014,7 +1048,8 @@ function ClassForm({
             value={key}
             onChange={(e) => {
               setKey(e.target.value);
-              // 用户没自己挑过色，就让颜色跟着 key 走——与后端同一个规则
+              // When the user has not chosen a color, this keeps the color following
+              // the key, using the same rule as the server.
               if (!colorTouched) setColor(colorForKey(e.target.value));
             }}
             className="w-full"
@@ -1034,7 +1069,8 @@ function ClassForm({
         <label className={lbl}>{S.ontology.shapeColor}</label>
         <div className="flex items-center gap-2">
           <ColorPicker value={color} onChange={(c: string) => { setColor(c); setColorTouched(true); }} shape={shape} />
-          {/* 形状：与图谱节点渲染一一对应（circle=四层圆 / square=四层方） */}
+          {/* The shape matches the graph node rendering directly: circle renders as a
+              four-layer circle, square renders as a four-layer square. */}
           <div className="flex rounded-lg overflow-hidden border border-white/10">
             {(["circle", "square"] as const).map((sh) => (
               <button
@@ -1057,8 +1093,10 @@ function ClassForm({
           </div>
         </div>
       </div>
-      {/* 多父：subClassOf 可以有多条。左栏按树画，一个类只能出现一次——
-          所以第一个当主父。界面说明这条，不另加一个"选主父"的控件 */}
+      {/* Multiple parents: a class can have several subClassOf relations. The left
+          rail draws a tree, and a class appears in it only once, so this uses the
+          first parent as the primary parent. The UI states this rule instead of
+          adding a separate "choose primary parent" control. */}
       <div>
         <label className={lbl}>{S.ontology.parent}</label>
         <MultiSearchSelect
@@ -1078,9 +1116,11 @@ function ClassForm({
           </p>
         )}
       </div>
-      {/* 互斥：**声明「不可能同时是」**。紧挨着父类，因为两者是同一件事的
-          两面——父类说「也是」，互斥说「不可能同时是」，而一致性检查正是
-          在这两者打架时报出「这个类永远不可能有实例」 */}
+      {/* Disjoint classes **declare "cannot be both at once".** This sits next to
+          Parent, because the two fields are two sides of one idea: Parent means "is
+          also", and Disjoint means "cannot be both at once". The consistency check
+          reports "this class can never have an instance" exactly when these two
+          conflict. */}
       <div>
         <label className={lbl}>{S.ontology.disjoint}</label>
         <p className="text-[11px] leading-relaxed text-neutral-600 mb-1.5">
@@ -1097,8 +1137,9 @@ function ClassForm({
           placeholder={S.ontology.searchTypes}
           emptyHint={S.ontology.noDisjoint}
         />
-        {/* 跟自己的父类互斥 = 这个类永远不可能有实例。当场说，
-            比让人跑一遍一致性检查再发现要快 */}
+        {/* Being disjoint with its own parent means this class can never have an
+            instance. Stating this here is faster than letting the user run a
+            consistency check to discover it. */}
         {disjoint.some((d) => parents.includes(d)) && (
           <p className="mt-1.5 text-[11px] text-[var(--u-danger)]">
             {S.ontology.disjointWithParent}
@@ -1107,7 +1148,8 @@ function ClassForm({
       </div>
       <div>
         <label className={lbl}>{S.ontology.description}</label>
-        {/* 语义指引：整段注入抽取 prompt，直接影响抽取归类质量 */}
+        {/* Semantic guidance: this whole text goes into the extraction prompt, so it
+            directly affects extraction classification quality. */}
         <textarea
           className="input-dark w-full px-3 py-2 text-sm min-h-[4.5rem] resize-y"
           value={description}
@@ -1146,7 +1188,7 @@ function ClassForm({
   );
 }
 
-/* ---------- 关系表单 ---------- */
+/* ---------- Relation form ---------- */
 
 function PropertyForm({
   kbId,
@@ -1159,8 +1201,9 @@ function PropertyForm({
   kbId: string;
   existing: RelationTypeView | null;
   allTypes: EntityTypeView[];
-  /** 本库的关系（不含属性）。逆与子属性的下拉从这里取——**属性不在其中**，
-   *  它的宾语是字面值，反过来无从谈起 */
+  /** This KB's relations, not including attributes. The inverse-of and sub-property-of
+   *  dropdowns draw from this list. **Attributes are not in this list,** because an
+   *  attribute's object is a literal value, so an inverse of it makes no sense. */
   allRelations: RelationTypeView[];
   onDone: (createdId?: string) => void;
   onError: (e: unknown) => void;
@@ -1172,15 +1215,18 @@ function PropertyForm({
   const [inverseFunctional, setInverseFunctional] = useState(
     existing?.inverse_functional ?? false,
   );
-  // 其余四条 OWL 公理。**推理机的判据全在这里**——从前只能靠导入 OWL 带进来，
-  // 在界面上手工建本体的人永远开不了那台机器（0002）
+  // The remaining four OWL axioms. **The reasoning engine's rules depend entirely on
+  // these.** Before this form existed, only an OWL import could set them, so a user
+  // building an ontology by hand in the UI could never turn on that engine (see
+  // decision 0002).
   const [transitive, setTransitive] = useState(existing?.is_transitive ?? false);
   const [symmetric, setSymmetric] = useState(existing?.is_symmetric ?? false);
   const [asymmetric, setAsymmetric] = useState(existing?.is_asymmetric ?? false);
   const [irreflexive, setIrreflexive] = useState(
     existing?.is_irreflexive ?? false,
   );
-  // 同一族的后两条，形状不同：指向另一个关系。空串 = 没声明
+  // The last two fields in this group have a different shape: each points to another
+  // relation. An empty string means the field is not set.
   const [inverseOf, setInverseOf] = useState(existing?.inverse_of ?? "");
   const [subPropertyOf, setSubPropertyOf] = useState(
     existing?.sub_property_of ?? "",
@@ -1188,25 +1234,30 @@ function PropertyForm({
   const [description, setDescription] = useState(existing?.description ?? "");
   const [domains, setDomains] = useState<string[]>(existing?.domains ?? []);
   const [ranges, setRanges] = useState<string[]>(existing?.ranges ?? []);
-  // 显示标签，不显示 key。**进提示词的 key 由服务端从库里取**，与界面显示什么无关；
-  // 而类树、属性列表也都显示标签，这里没有理由例外——中文库里用户该看到
-  // "发票记录" 而不是 invoice_record
+  // This shows the label, not the key. **The server reads the key that goes into the
+  // prompt from the database,** independent of what the UI shows. The class tree and
+  // the properties list also show the label, so this has no reason to be an exception.
+  // A user with a Chinese-language KB should see "发票记录", not invoice_record.
   const typeOpts = useMemo(
     () => parentOptions(allTypes, undefined),
     [allTypes],
   );
-  // 两个下拉的选项：本库的其它关系。
+  // The options for both dropdowns: the other relations in this KB.
   //
-  // **自己不进列表**，两条都是。子属性指向自己数据库直接拒（那是个环）；
-  // 逆指向自己在语义上合法——但它等于 `symmetric`，而那个复选框就在上面，
-  // 在这里提供第二条路只会让人写出 R0 要报的东西。
+  // **Neither dropdown lists the relation itself.** For sub-property-of, the database
+  // rejects a self-reference directly, because that would be a cycle. For inverse-of,
+  // a self-reference is valid in theory, but it equals `symmetric`, and that checkbox
+  // sits right above. Offering a second path to the same result here would only let a
+  // user create the state that check R0 reports as an error.
   //
-  // 唯一的例外是**当前值就是自己**：OWL 导入进来的可以长这样，从列表里漏掉
-  // 它就会让下拉显示空白，而空白一保存就把已声明的抹了
+  // The one exception is **when the current value already is the relation itself.** An
+  // OWL import can create that state. Leaving it out of the list would show the
+  // dropdown as blank, and saving while blank would erase the existing value.
   const linkOptions = (current: string) => [
     { value: "", label: S.ontology.noLink },
-    // 当前值就是自己时把自己补回列表，否则下拉显示空白，
-    // 而空白一保存就把已声明的抹了
+    // Adds the relation back to the list when the current value is itself. Otherwise
+    // the dropdown would show blank, and saving while blank would erase the existing
+    // value.
     ...(existing && current === existing.id
       ? [{ value: existing.id, label: existing.label, hint: existing.key }]
       : []),
@@ -1214,7 +1265,8 @@ function PropertyForm({
       .filter((r) => r.id !== existing?.id)
       .map((r) => ({ value: r.id, label: r.label, hint: r.key })),
   ];
-  /** 下拉里选中那条的显示名。找不到就回落到 id——宁可难看，不要空着 */
+  /** The display name for the selected dropdown value. This falls back to the id when
+   * not found. An ugly value is better than a blank one. */
   const nameOf = (id: string) =>
     allRelations.find((r) => r.id === id)?.label ?? id;
   const toggle = (
@@ -1234,8 +1286,9 @@ function PropertyForm({
             is_symmetric: symmetric,
             is_asymmetric: asymmetric,
             is_irreflexive: irreflexive,
-            // 空串要变成 null 再送——服务端收 `Option<Uuid>`，
-            // `""` 解不成 UUID，会是一个 422 而不是「清空」
+            // This sends an empty string as null. The server expects `Option<Uuid>`,
+            // and `""` does not parse as a UUID. Sending `""` would return a 422
+            // error instead of clearing the field.
             inverse_of: inverseOf || null,
             sub_property_of: subPropertyOf || null,
             description,
@@ -1252,8 +1305,9 @@ function PropertyForm({
             is_symmetric: symmetric,
             is_asymmetric: asymmetric,
             is_irreflexive: irreflexive,
-            // 空串要变成 null 再送——服务端收 `Option<Uuid>`，
-            // `""` 解不成 UUID，会是一个 422 而不是「清空」
+            // This sends an empty string as null. The server expects `Option<Uuid>`,
+            // and `""` does not parse as a UUID. Sending `""` would return a 422
+            // error instead of clearing the field.
             inverse_of: inverseOf || null,
             sub_property_of: subPropertyOf || null,
             description,
@@ -1311,8 +1365,9 @@ function PropertyForm({
           className="w-full"
         />
       </div>
-      {/* 类型签名。界面显示标签，而进提示词的是 key —— 那一步在服务端，
-          与这里显示什么无关（docs/decisions/0004 定的是提示词里必须用 key） */}
+      {/* The type signature. The UI shows the label, while the key goes into the
+          prompt; that step happens on the server, independent of what shows here.
+          Decision 0004 requires the prompt to use the key. */}
       <div>
         <label className={lbl}>{S.ontology.signature}</label>
         <p className="text-[11px] leading-relaxed text-neutral-600 mb-1.5">
@@ -1358,11 +1413,15 @@ function PropertyForm({
           ]}
         />
       </div>
-      {/* 六条公理并成一组。**它们本来就是同一族**——推理机（0002）拿它们当
-          判据，散在表单各处会让人以为前两条和后四条是两回事。
-          每一条底下写清「勾了会发生什么」：这些开关不是描述，是会改变系统行为的
-          声明——`functional` 让时态引擎自动闭合旧值，`transitive` 让推理机往图里
-          加边。看不出后果的开关，人只会照着直觉乱勾。 */}
+      {/* These six axioms group together, **because they are one family.** The
+          reasoning engine (see decision 0002) uses them as its rules, and spreading
+          them across the form would suggest that the first two and the last four are
+          unrelated. Below each one, the text states what checking it does. These
+          checkboxes are not descriptions; they are declarations that change system
+          behavior. `functional` makes the temporal engine close the old value
+          automatically, and `transitive` makes the reasoning engine add edges to the
+          graph. A checkbox with no visible consequence invites a user to check it at
+          random. */}
       <div>
         <label className={lbl}>{S.ontology.axioms}</label>
         <p className="text-[11px] leading-relaxed text-neutral-600 mb-1.5">
@@ -1405,16 +1464,19 @@ function PropertyForm({
             </label>
           ))}
         </div>
-        {/* 对称与反对称同时勾是自相矛盾的（只对空关系成立）。本体自洽性检查
-            会报出来，但在这里当场说一句比让人跑一遍检查再发现要快 */}
+        {/* Checking both symmetric and asymmetric is self-contradictory, except for an
+            empty relation. The ontology consistency check reports this, but stating it
+            here is faster than letting the user run the check to discover it. */}
         {symmetric && asymmetric && (
           <p className="mt-1.5 text-[11px] text-[var(--u-danger)]">
             {S.ontology.axiomConflict}
           </p>
         )}
-        {/* 同一组的后两条，只是形状不同：它们指向**另一个关系**，所以是下拉
-            不是复选框。放在这里而不是单开一节——推理机的四种规则源里，两条是
-            上面的勾，两条是下面的选，分开会让人以为它们是两回事（0002） */}
+        {/* The last two fields in this group only have a different shape: each points
+            to **another relation**, so each uses a dropdown instead of a checkbox.
+            This keeps them here rather than in a separate section. Of the reasoning
+            engine's four rule sources (decision 0002), two are checkboxes above and two
+            are dropdowns here; separating them would suggest they are unrelated. */}
         <div className="mt-3 space-y-2.5 border-t border-white/5 pt-3">
           {(
             [
@@ -1449,8 +1511,10 @@ function PropertyForm({
               />
             </div>
           ))}
-          {/* 选了之后当场把话说全。**这两条推出来的事实主宾未必同向**——
-              逆要对调，子属性不对调，只看名字分不出来，写出来就分得出 */}
+          {/* Once the user picks a value, this states the full effect right away. **The
+              subject and object of the inferred fact are not always in the same
+              order.** An inverse relation swaps them; a sub-property does not. The
+              names alone do not make this clear, so this spells it out. */}
           {(inverseOf || subPropertyOf) && (
             <div className="text-[11px] leading-relaxed text-neutral-500 space-y-0.5">
               {inverseOf && (
@@ -1508,18 +1572,23 @@ function PropertyForm({
   );
 }
 
-/* ---------- 未匹配信号 + AI 建议 ---------- */
+/* ---------- Unmatched signals plus AI suggestions ---------- */
 
 
-/** 类型消解：把「大致对」的类换成更具体的那个。
+/** Type refinement replaces a roughly-right class with a more specific one.
  *
- * **两步走，跟本体导入同一个形状**：先看一遍会发生什么，再决定落不落。这里还多
- * 一层理由——改类不进时间轴，不像事实改写那样在实体历史里自己显形，所以
- * 「先看一眼」是唯一能看见它的时机。
+ * **This works in two steps, the same shape as ontology import:** the user previews
+ * what will happen, then decides whether to apply it. There is a further reason for
+ * this here. A type change does not save to the timeline, so it does not show up on
+ * its own in an entity's history, the way a fact rewrite does. The preview is the only
+ * time the user can see it.
  *
- * 跑完分三档，各有各的处置：自动改掉的（可整批撤销）、跨了分类轴留给人的、
- * 裁决说「都不是」的。**最后那一档带着理由**——这一步押在「选择都不是是个
- * 体面答案」上，不记理由，最大的那一档就是不透明的。
+ * After it runs, the result falls into three groups, each with its own handling:
+ * changes made automatically (the whole batch can be undone), changes that cross a
+ * classification axis and go to a human for review, and cases the model judged to be
+ * none of the candidates. **The last group carries a reason.** This step relies on
+ * "choosing none of the candidates is a reasonable answer". Without a reason, that
+ * group, usually the largest, would give the user no way to check the model's work.
  */
 function RefinePanel({
   kbId,
@@ -1600,7 +1669,7 @@ function RefinePanel({
         </button>
       </div>
 
-      {/* ---- 只算不写的那一步 */}
+      {/* ---- The compute-only step, before anything saves */}
       {preview && (
         <div className="space-y-2">
           <p className="text-xs text-neutral-500">
@@ -1624,8 +1693,10 @@ function RefinePanel({
                   {S.review.factsCount(s.fact_count)}
                 </span>
               </div>
-              {/* **把送去检索的那段字显示出来**：找不着的时候，第一个要看的
-                  就是我们拿什么去找的，而不是猜画像还是类描述的问题 */}
+              {/* **This shows the text sent to retrieval.** When retrieval finds
+                  nothing useful, the first thing to check is what text was searched,
+                  rather than guessing whether the entity profile or the class
+                  description is at fault. */}
               <p className="mt-1 text-[11px] text-neutral-500 line-clamp-2">
                 {s.profile}
               </p>
@@ -1650,7 +1721,7 @@ function RefinePanel({
         </div>
       )}
 
-      {/* ---- 落库之后的三档 */}
+      {/* ---- The three groups, after the result saves */}
       {outcome && (
         <div className="space-y-3">
           <div className="flex items-center gap-3 flex-wrap">
@@ -1694,8 +1765,9 @@ function RefinePanel({
                       {r.reason}
                     </p>
                   )}
-                  {/* **认可的是这一对类，不是这一个实体。** 认可一次，
-                      之后同一对不再进人工——那正是这一档大部分条目的成因 */}
+                  {/* **This approves the pair of classes, not this one entity.** After
+                      one approval, the same pair no longer needs human review, which
+                      is how most items in this group arise in the first place. */}
                   {r.from_type_id && (
                     <button
                       className="u-btn u-btn-primary mt-2 text-xs"
@@ -1731,8 +1803,9 @@ function RefinePanel({
                       {d.coarse ?? S.graph.untyped}
                     </span>
                   </div>
-                  {/* 理由与头一个候选一起给：理由说不通时，看候选就知道是
-                      检索没找着还是裁决没看上 */}
+                  {/* This shows the reason together with the top candidate. When the
+                      reason is unclear, the candidate shows whether retrieval found
+                      nothing useful or the model rejected what it found. */}
                   {d.reason && (
                     <p className="mt-0.5 text-[11px] text-neutral-500">
                       {d.reason}
@@ -1765,20 +1838,25 @@ function MissesPanel({
   onChanged: () => void;
   onError: (e: unknown) => void;
 }) {
-  // 默认收起：已忽略的是**背景信息**，不该跟待处理的挤在一起抢注意力
+  // This collapses by default. A dismissed item is **background information,** and it
+  // must not compete for attention with the pending items.
   const [showDismissed, setShowDismissed] = useState(false);
   const [proposals, setProposals] = useState<OntologyProposals | null>(null);
-  // 上次算出来、还没人表态的那些：刷新页面之后从库里捞回来（0049）。
+  // The proposals computed last time, with no user decision yet: this reads them back
+  // from the database after a page refresh (see decision 0049).
   //
-  // 从前这里只有上面那个 useState——刷新一次、切走一次，整批提议就没了，
-  // 想再看只能重跑一次模型，而重跑未必给出同一批归并。归并了哪些说法正是
-  // 唯一能查证过并的东西（0003 的 optimized_for → runs_on 就是这么抓出来的）
+  // Before this query existed, this component held that state only in the useState
+  // above. A refresh or a navigation away lost the whole batch of proposals. Seeing
+  // them again meant rerunning the model, and a rerun was not guaranteed to group the
+  // same forms together. Which forms a proposal groups is the only way to verify a
+  // merge (this is how decision 0003 caught the optimized_for to runs_on case).
   const storedProposals = useQuery({
     queryKey: ["storedProposals", kbId],
     queryFn: () => api.storedProposals(kbId),
   });
   useEffect(() => {
-    // 只在还没有本地结果时回填。刚点完 Suggest 的那一批更新，不该被覆盖
+    // Fills in the stored data only when no local result exists yet. A batch just
+    // computed by clicking Suggest must not be overwritten.
     if (proposals === null && storedProposals.data) {
       const d = storedProposals.data;
       const empty =
@@ -1788,24 +1866,27 @@ function MissesPanel({
       if (!empty) setProposals(d);
     }
   }, [storedProposals.data, proposals]);
-  // 最近一次采纳，供撤销。只留最近一次——旧批次要撤销走审计台账，
-  // 那里本来就记着每次采纳动了哪个关系、多少条
+  // The most recent adoption, for undo. This keeps only the most recent one; undoing an
+  // older batch goes through the audit log instead, which already records which
+  // relation each adoption changed and how many facts moved.
   const [lastAdopt, setLastAdopt] = useState<{
     batches: string[];
     key: string;
     moved: number;
   } | null>(null);
-  // 撤销要二次确认：一次改回成批事实
+  // Undo needs a second confirmation, because it changes a batch of facts at once.
   const [confirmUndo, setConfirmUndo] = useState<{
     batches: string[];
     moved: number;
   } | null>(null);
-  // 系统自动扩过本体没有——横幅要据此显示，撤干净了后端返回 null
+  // Whether the system auto-extended the ontology. The banner below shows based on
+  // this. After a full undo, the server returns null.
   const autoRun = useQuery({
     queryKey: ["auto-extension", kbId],
     queryFn: () => api.lastAutoExtension(kbId),
   });
-  // 待认领的表层谓词：提案的影响面（"将改写 57 条"）从这里算
+  // The unclaimed surface predicates. A proposal's impact, such as "will rewrite 57
+  // facts", is computed from this data.
   const surface = useQuery({
     queryKey: ["proposed-predicates", kbId],
     queryFn: () => api.proposedPredicates(kbId),
@@ -1842,7 +1923,8 @@ function MissesPanel({
         description: p.description,
       }),
     onSuccess: (_data, p) => {
-      // 已采纳：从提案列表移除，并顺带清掉对应的未匹配统计 chip（本体已覆盖）
+      // Adopted: removes it from the proposals list, and also clears the matching
+      // unmatched-count chip, because the ontology now covers it.
       toast.success(S.toast.added);
       setProposals(
         (prev) =>
@@ -1852,15 +1934,18 @@ function MissesPanel({
           },
       );
       api.dismissMiss(kbId, "entity_type", p.key).catch(() => {});
-      // 提案表态落库（0049）：下一轮 Suggest 不会把它刷回待看
+      // Saves the decision on this proposal (see decision 0049), so the next Suggest
+      // run does not bring it back as pending.
       api.decideProposal(kbId, "entity_types", p.key, "adopted").catch(() => {});
       onChanged();
     },
     onError,
   });
   const approveRelation = useMutation({
-    // 带 forms 的提案走 adopt：建关系顺带把等着它的无谓词事实认过去。
-    // 只建关系的话本体长大了、图没变好——那些事实会继续是"有关联"
+    // A proposal with forms goes through adopt, which creates the relation and also
+    // claims the unassigned facts waiting for it. Creating the relation alone would
+    // grow the ontology without improving the graph; those facts would still show as
+    // an unlabeled "related to" link.
     mutationFn: (p: {
       key: string;
       label: string;
@@ -1889,7 +1974,8 @@ function MissesPanel({
       const d = data as { remapped?: number; batch?: string };
       const moved = d.remapped ?? 0;
       toast.success(moved > 0 ? S.ontology.adopted(moved) : S.toast.added);
-      // 撤销的把手：采纳改写了成批事实，没有回头路的话没人敢点第一下
+      // A handle for undo: adoption rewrites a batch of facts, and with no way back,
+      // no one would risk clicking the first time.
       if (moved > 0 && d.batch)
         setLastAdopt({ batches: [d.batch], key: p.key, moved });
       setProposals(
@@ -1906,10 +1992,14 @@ function MissesPanel({
     onError,
   });
 
-  // 逐条串行而不是加个批量端点：每个谓词各有自己的批次和撤销粒度，
-  // 而且部分失败能如实报告（"5 个成功，1 个 key 已存在"）而不是整批回滚
-  // 属性提案：宾语是字面值的那些。走同一个采纳入口，但值要按 datatype
-  // 换算，换不动的不改写——所以回执里的 unconvertible 必须说出来
+  // This runs one predicate at a time, instead of adding a bulk endpoint. Each
+  // predicate gets its own batch and its own undo granularity, and a partial failure
+  // can report honestly ("5 succeeded, 1 key already exists") instead of rolling back
+  // the whole batch.
+  // Attribute proposals: predicates whose object is a literal value. These go through
+  // the same adoption entry point, but a value must convert to the target datatype.
+  // A value that cannot convert does not get rewritten, so the response must report
+  // unconvertible values explicitly.
   const approveAttribute = useMutation({
     mutationFn: (p: {
       key: string;
@@ -1956,14 +2046,16 @@ function MissesPanel({
     },
     onError,
   });
-  // 映射到已有类型：不建东西，只把这些说法的事实挂过去。
-  // 跟新建走同一个采纳入口，因为它对图做的事一模一样——也因此同样可撤销
+  // Mapping to an existing type: this creates nothing, and only attaches these forms'
+  // facts to the existing type. It goes through the same adoption entry point as a new
+  // predicate, because it changes the graph the same way, and so it can undo the same way.
   const approveMapping = useMutation({
     mutationFn: (p: { key: string; kind?: string; forms?: string[] }) =>
       api.adoptPredicate(kbId, {
         key: p.key,
         existing: true,
-        // 目标是属性时值要按它的 datatype 换算，服务端据此分道
+        // When the target is an attribute, the value must convert to its datatype.
+        // The server routes based on this field.
         kind: p.kind === "attribute" ? "attribute" : "relation",
         forms: p.forms ?? [],
       }),
@@ -2182,8 +2274,10 @@ function MissesPanel({
           )}
         </div>
       )}
-      {/* 系统自己动了本体，必须让人看见——只记在审计台账里不算可见。
-          默认开启的前提是它的动作可见且可退，这条横幅是"可见"那一半 */}
+      {/* When the system changes the ontology on its own, the user must see it.
+          Recording it only in the audit log does not count as visible. Turning this
+          feature on by default relies on its actions being visible and reversible;
+          this banner is the "visible" half of that. */}
       {autoRun.data?.run && !lastAdopt && (
         <div className="mt-3 rounded-lg border border-[var(--u-accent)]/25 bg-[var(--u-accent)]/[0.06] px-3 py-2.5">
           <div className="flex items-start gap-2">
@@ -2218,7 +2312,8 @@ function MissesPanel({
         </div>
       )}
 
-      {/* 采纳改写了成批事实——没有回头路的话没人敢点第一下 */}
+      {/* Adoption rewrites a batch of facts. With no way back, no one would risk
+          clicking the first time. */}
       {lastAdopt && (
         <div className="mt-3 flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-2">
           <span className="text-xs text-neutral-300">
@@ -2244,7 +2339,8 @@ function MissesPanel({
         </div>
       )}
 
-      {/* 撤销一次改回成批事实：轻确认——它本身也是可逆的，不必打字解锁 */}
+      {/* Undoing changes a batch of facts back. This uses a light confirm, because
+          undo is itself reversible, so typing to confirm is not required. */}
       {confirmUndo && (
         <DangerConfirm
           title={S.ontology.undoTitle}
@@ -2262,7 +2358,8 @@ function MissesPanel({
             <h4 className="text-xs font-bold text-neutral-400">
               {S.ontology.proposals}
             </h4>
-            {/* 常见情形是"这些都对"——一条条点是把一个决定拆成八个 */}
+            {/* The common case is "all of these are correct". Clicking each one
+                separately turns one decision into eight. */}
             {proposals.relation_types.length +
               proposals.entity_types.length +
               (proposals.attribute_types?.length ?? 0) +
@@ -2287,8 +2384,10 @@ function MissesPanel({
             )}
           </div>
           <div className="space-y-1.5">
-            {/* 排在最前：它说的是"本体已经有了"，而这正是最该先看见的一句。
-                排在新建后面的话，人一路点下来就把重复建出来了 */}
+            {/* This sorts first. It says "the ontology already has this", and that is
+                the message the user most needs to see first. Sorting it after the
+                new-item proposals would let a user create a duplicate while clicking
+                through the list. */}
             {(proposals.map_to ?? []).map((p) => (
               <div key={`map-${p.key}`} className="flex items-center gap-2 text-sm">
                 <Chip tone="success">=</Chip>
@@ -2347,8 +2446,9 @@ function MissesPanel({
                 <span className="font-mono text-neutral-300">{p.key}</span>
                 <span className="text-neutral-200">{p.label}</span>
                 {p.temporal && <Chip tone="neutral">{p.temporal}</Chip>}
-                {/* 影响面：采纳后会改写多少条、归并了哪些写法。没有这个，
-                    "approve" 就只是凭空多一个空关系 */}
+                {/* The impact: how many facts adoption will rewrite, and which forms it
+                    merges. Without this, "approve" would just add an empty relation
+                    for no visible reason. */}
                 {!!p.forms?.length && (
                   <span
                     className="text-xs text-[var(--u-accent)]"
@@ -2374,7 +2474,8 @@ function MissesPanel({
             ))}
             {(proposals.attribute_types ?? []).map((p) => (
               <div key={`attr-${p.key}`} className="flex items-center gap-2 text-sm">
-                {/* A 而不是 P：字面值那一档跟关系是两回事，界面上分得清 */}
+                {/* This uses "A", not "P", because the literal-value group is not a
+                    relation, and the UI keeps the two visibly distinct. */}
                 <Chip tone="warn">A</Chip>
                 <span className="font-mono text-neutral-300">{p.key}</span>
                 <span className="text-neutral-200">{p.label}</span>
@@ -2416,11 +2517,14 @@ function MissesPanel({
   );
 }
 
-/* ---------- 本体导入：上传 → 预览计划 → 确认落库 ---------- */
-/* 预览与落库共用服务端同一个 plan。这个面板的全部工作是把计划里
-   **会咬人的三件事**放到人点确认之前：函数性关系（错误的唯一性声明会造出
-   成队假冲突）、没有描述的类（description 逐字进抽取提示词，缺了就静默抽差）、
-   key 撞车（报告不解决——自动改名会让下次重导入认不出自己上次建的是哪个）。 */
+/* ---------- Ontology import: upload, preview the plan, confirm, save ---------- */
+/* The preview and the save step share the same server-side plan. This panel's whole
+   job is to show **the three things in the plan that can cause trouble,** before the
+   user clicks confirm: a functional relation (a wrong uniqueness declaration creates a
+   string of false conflicts), a class with no description (the description goes
+   word-for-word into the extraction prompt, and a missing one silently lowers
+   extraction quality), and a key collision (renaming automatically does not fix this;
+   it would make the next re-import fail to recognize what it created last time). */
 
 function ImportPanel({
   kbId,
@@ -2534,7 +2638,8 @@ function ImportPanel({
             </p>
           ) : (
             <>
-              {/* 三条警告在计数之前：人只会读第一屏 */}
+              {/* The three warnings come before the counts, because a user reads only
+                  the first screen. */}
               <Warning
                 show={plan.functional_relations > 0}
                 tone="warn"
@@ -2641,7 +2746,8 @@ function ImportPanel({
         </div>
       )}
 
-      {/* 导入历史：谁在什么时候拿哪个文件动过本体。原文按 sha256 存着 */}
+      {/* Import history: who changed the ontology, when, and with which file. The
+          original file saves under its sha256 hash. */}
       <div className="mt-5 border-t border-white/10 pt-3">
         <h4 className="text-xs font-medium text-neutral-400 mb-2">
           {S.ontology.importHistory}
@@ -2681,13 +2787,15 @@ function takenCount(p: ImportPlan) {
   ).length;
 }
 
-/** IRI 尾巴才是人认得出的部分，前缀在列表里只占宽度 */
+/** Only the tail of an IRI is the part a person recognizes. The prefix only takes up
+ * width in the list. */
 function shortIri(iri: string) {
   const i = Math.max(iri.lastIndexOf("#"), iri.lastIndexOf("/"));
   return i < 0 ? iri : iri.slice(i + 1);
 }
 
-/** 一条警告：标题给数，正文一句给后果，条目折在 details 里 */
+/** One warning: the title gives a count, the body gives the consequence in one
+ * sentence, and the items collapse into a details element. */
 function Warning({
   show,
   tone,
@@ -2731,7 +2839,8 @@ function Warning({
   );
 }
 
-/** 一段的去向计数：新建 / 更新 / 跳过，零的不显示 */
+/** A count of what happens to one section's items: create, update, or skip. This
+ * hides a count of zero. */
 function PlanRow({
   label,
   items,

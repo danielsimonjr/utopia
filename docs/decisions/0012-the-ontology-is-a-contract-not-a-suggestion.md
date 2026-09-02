@@ -1,175 +1,129 @@
-# 本体是一份契约，不只是一份建议
+# 0012 · The ontology is a contract, not a suggestion
 
-**状态**：已实施 · 五轮对照实验 · 违反率 57% → 4%，反向 39 → 0 · 文末三条待做全部仍未做；本文之后本体又能声明 `inverseOf` / `subPropertyOf`（#177 / #179）并被推理机消费，包清单扩到五个而实验只覆盖前两个（2026-09-02 核）
+**Status**: Implemented, based on five rounds of paired experiments. Violation rate dropped from 57% to 4%; true reversed facts dropped from 39 to 0. All three "to do" items at the end are still not done. Since this document, the ontology can also declare `inverseOf` and `subPropertyOf` (#177, #179), consumed by the reasoning engine; the pack list grew to five, though these experiments cover only the first two (checked 2026-09-02).
 
-[0008](0008-ontology-packs-as-cold-start.md) 建了预制本体包，但它要回答的那个问题
-——**大本体到底顶不顶用**——一次都没被问过：装了包的库全是 5 篇文档、26 条事实的
-基准跑，量的是提示词开销，不是质量。这一篇是第一次拿真语料问它。
+[0008](0008-ontology-packs-as-cold-start.md) built ontology packs, but the question they were meant to answer — **does a large ontology actually help** — had never been tested. Every base with a pack installed was a 5-document, 26-fact benchmark run, measuring prompt overhead, not quality. This document is the first to ask that question on real text.
 
-答案分两半：**词汇量确实在接住东西，而声明出来的约束一条都没被执行。**
+The answer splits in two: **vocabulary size really does capture more, and not one declared constraint was actually enforced.**
 
-## 一、包的收益是真的
+## First: the pack's benefit is real
 
-`ai-timeline-ends`（6 篇维基百科条目）× schema.org + W3C Org（1655 关系 / 973 类），
-**零种子**（#125、#128 之后建库不播任何关系）：
+`ai-timeline-ends` (6 Wikipedia articles) with schema.org plus W3C Org (1,655 relations, 973 types), **zero seeds** (after #125 and #128, creating a base seeds no relation at all):
 
-- 215 条有谓词的事实、41 个不同关系，**全部来自本体包**，自动扩本体一个都没长出来
-- 空谓词 25.6%——历史上 10 个种子时 `related_to` 占 55.5%
+- 215 facts with a predicate, across 41 distinct relations, **all sourced from the pack** — auto-extend grew zero of them
+- Empty predicates: 25.6% (historically, with 10 seed relations, `related_to` reached 55.5%)
 
-## 二、但方向是反着写进去的
+## Second: but direction was written in reverse
 
 ```
 Elon Musk (person) --employee--> Microsoft
 ```
 
-而 schema.org 声明 `employee (organization → person)`。**130 条可校验的事实里 102 条这样反着落库。**
+While schema.org declares `employee (organization → person)`. **Of 130 checkable facts, 102 were stored backward like this.**
 
-这恰恰是选 schema.org 的理由失效——`ontology_packs.rs` 写着「1488 个属性带
-domain + range，方向是**声明的**不是描述的」。声明了，然后没人执行。
+This is exactly the reasoning behind choosing schema.org failing to hold — `ontology_packs.rs` states: "1,488 properties carry domain and range; direction is **declared**, not just described." It was declared, and then nothing enforced it.
 
-而且它比空谓词严重得多：**空谓词是诚实的沉默，反向边是自信的错误**。图上写着
-Musk 雇佣了 Microsoft，而 0002 说推理机是缺陷放大器——这正是它会放大的那种输入。
+And it is far worse than an empty predicate: **an empty predicate is honest silence; a reversed edge is a confident mistake.** The graph states that Musk employed Microsoft, and 0002 already noted the reasoning engine amplifies defects — this is exactly the kind of input it would amplify.
 
-## 三、一个根因，两个症状
+## Third: one root cause, two symptoms
 
-查下去，类型判错与方向反向是同一件事的两副面孔：
+Digging in, wrong types and reversed direction turned out to be two faces of the same problem:
 
 ```
-#128 撤掉种子 → seed_classes 空（它取的是 builtin 的类）
+#128 removed seed types → seed_classes is empty (it read only builtin types)
         ↓
-检索偏爱字面出现在正文里的叶子类
-（讲 Sutskever 的分块，976 个类里 researcher 第 4、person 第 359、organization 第 795）
+Retrieval favors leaf types that appear literally in the source text
+(in a chunk about Sutskever, out of 976 types, researcher ranked 4th, person 359th, organization 795th)
         ↓
    ┌──────────────────────┬──────────────────────────┐
-实体判成 researcher          employee 的签名退化成 (* → *)
-（schema.org 里它是         （sig_of 只认铺出去的类，
-  Audience 的子类，不是人）    一侧没铺就写 *）
+An entity is typed researcher      The employee signature degrades to (* → *)
+(in schema.org it is a subtype       (sig_of only recognizes listed types;
+ of Audience, not of person)          if one side is not listed, it writes *)
 ```
 
-`build_lists` 的注释早写过这道地板：「**内置类恒在**。检索漏掉的分块仍然要有地方
-落脚，否则模型无类可选」。种子退场后判据悬空了——**它当初碰巧等价，只因为种子类
-正好是那几个通用类**。
+A comment in `build_lists` already stated this floor: "**seed types always present** — a chunk retrieval misses still needs somewhere to land, or the model has no type to choose from." Once seeds were retired, this rule lost its footing — **it had only worked by coincidence, because the seed types happened to be exactly the general-purpose ones.**
 
-## 四、五轮实验
+## Fourth: five rounds of experiments
 
-同语料同本体，每次只动一个变量，全部 60/60 块：
+Same corpus, same ontology, changing one variable per round, all runs over 60/60 chunks:
 
-| 变体 | 事实 | 空谓词 | 可校验 | 违反 | **真·反向** | 违反率 |
+| Variant | Facts | Empty predicate | Checkable | Violations | **True reversals** | Violation rate |
 |---|---|---|---|---|---|---|
-| 只改提示词 | 429 | 138 | 172 | 98 | 39 | 57.0% |
-| + 祖先地板 | 451 | 138 | 181 | 63 | 31 | 34.8% |
-| + 签名类恒在 | — | — | — | — | 26 | 37.2% |
-| + 按库内类型掰正 | 447 | 139 | 179 | **0** | **0** | 29.6% |
-| + 前缀归并 + 不适用则沉默 | 447 | 179 | 149 | **6** | **0** | **4.0%** |
+| Prompt wording only | 429 | 138 | 172 | 98 | 39 | 57.0% |
+| + ancestor floor | 451 | 138 | 181 | 63 | 31 | 34.8% |
+| + always-list-signature-types | — | — | — | — | 26 | 37.2% |
+| + correct direction against the base's real types | 447 | 139 | 179 | **0** | **0** | 29.6% |
+| + stem-based merging + silence when not applicable | 447 | 179 | 149 | **6** | **0** | **4.0%** |
 
-（第三行停在 41/60 块——服务器被杀，只能看比率。）
+(The third row stopped at 41/60 chunks — the server was killed mid-run; only the rate is meaningful.)
 
-### 提示词能做的，和不能做的
+### What prompt wording can and cannot fix
 
-第一版把两件事混成一句 "hint, not a rule — when the text says otherwise, write what
-the text says"，于是模型连参数顺序也按原文说法写。两件事的可覆盖性根本不同：
+The first version merged two different ideas into one instruction, "hint, not a rule — when the text says otherwise, write what the text says," so the model also applied this to argument order, following the source's phrasing there too. The two ideas differ completely in how overridable they should be:
 
-- **哪些类型能参与**：提示不是闸门。本体可能写错，原文说西雅图就写西雅图。
-  [0001](0001-ontology-import-and-governance.md) 的判断在这里不变——硬闸门会
-  系统性丢数据，`part_of` 烧我们的正是那样。
-- **参数顺序**：由签名定。**顺序不是关于世界的断言，是这个 key 的编码约定**；
-  原文从来没有「说了别的方向」，它只说两个实体之间存在某种关系。
+- **Which types can take part**: a hint, not a gate. The ontology can be wrong; if the source says Seattle, write Seattle. [0001](0001-ontology-import-and-governance.md)'s judgment holds unchanged here — a hard gate discards data systematically, the same way `part_of` burned us before.
+- **Argument order**: set by the signature. **Order is not a claim about the world, it is an encoding convention for this key**; the source text never "states a different direction" — it only states that some relationship exists between two entities.
 
-改了之后有效，但**不是主力**：三轮提示词把违反率从 57% 压到 35%，压下去的
-**全是类型判错那一半**，真·反向纹丝不动（22.7% → 17.1% → 17.6%，后两个在噪声里）。
+Wording changes did help, but **they were not the main driver**: three rounds of prompt wording brought the violation rate from 57% to 35%, and the drop came **entirely from the wrong-type half of the problem** — true reversals barely moved (22.7% → 17.1% → 17.6%, with the last two indistinguishable from noise).
 
-**模型看得见签名，就是不照做**——英语的 "X is an employee of Y" 太强。
-继续加措辞不会赢。
+**The model can see the signature and still not follow it** — the English phrase "X is an employee of Y" is too strong a pull. More wording will not win this.
 
-### 于是在写入时掰正
+### So direction gets corrected at write time
 
-主语违反 domain **而宾语符合**时，按签名交换主宾。
+When the subject fails the domain check **but the object passes it**, swap subject and object to match the signature.
 
-这不是新原则：`produced_by` 命中 `produces` 时（#109）早就在自动翻转主宾了，
-区别只在触发条件是**措辞**还是**签名**。
+This is not a new principle: when `produced_by` matches `produces` (#109), subject and object were already swapped automatically — the only difference is whether the trigger is **wording** or **a signature**.
 
-当初反对自动掰正的理由是实体类型不可靠——实测 Elon Musk 被判成 `researcher`。
-**祖先地板修好之后那个前提不成立了**，同一批人判成了 `person`。
+The original objection to automatic correction was that entity types were unreliable — Elon Musk was measured as being typed `researcher`. **That premise stopped holding once the ancestor floor was fixed**; the same batch then typed him `person`.
 
-类型**从库里的实体读**，不用抽取器手上那份 `entity_type_of`——那份只覆盖模型在
-这一块里声明过的实体，而宾语常是别处已存在的实体。**这一处差别就是反向从 10 降到 0
-的原因。**
+Type is **read from the entity stored in the base**, not from the extractor's own `entity_type_of` map — that map only covers entities the model declared within this one chunk, while the object is often an entity that already exists elsewhere. **This one difference is why reversed facts dropped from 10 to 0.**
 
-**绝不静默**：每次掰正落一条 `direction_corrected`。0001 反对的是「用可能错的声明
-驱动**自动动作**」，而留痕的动作不属于那一类。29 次里有 1 次掰错（`spatial`，
-schema.org 对它的 domain 定义本就模糊）——这是这个机制的固有成本：
-**它信任本体的声明，而声明可能不适用于这对实体。**
+**Never silent**: every correction writes a `direction_corrected` marker. 0001's objection was to "letting a declaration that might be wrong drive an **automatic action**" — a logged, traceable action does not belong to that category. Of 29 corrections, 1 was wrong (`spatial`, where schema.org's own domain for it is genuinely ambiguous) — this is an inherent cost of the mechanism: **it trusts the ontology's declaration, and a declaration can fail to apply to this specific pair.**
 
-### 不适用的关系该沉默
+### A relation that does not apply should go silent
 
-对调也不合法时，从前照原样落库，等于**用本体的名义说一件本体不同意的事**：
+When swapping still does not make the fact legal, it used to be stored as-is anyway — which meant **using the ontology's authority to state something the ontology itself disagrees with**:
 
 ```
-OpenAI --affectedBy--> …          schema.org 的 affectedBy 是医学检验用的
-Mistral --amount--> €105 million  amount 属于融资工具，不属于公司
-Anthropic --competitor--> OpenAI  schema.org 的 competitor 是 SportsEvent 的属性
+OpenAI --affectedBy--> …          schema.org's affectedBy is a medical-test term
+Mistral --amount--> €105 million  amount belongs to a financing instrument, not a company
+Anthropic --competitor--> OpenAI  schema.org's competitor is a SportsEvent property
 ```
 
-现在丢掉谓词，保留主宾、时间、证据，原词留在 `fact_evidence.proposed_predicate`，
-显示时由 `fact_surface_predicate()` 取回（[0010](0010-no-relation-is-no-relation.md)）。
-验过没有变哑：**退回的 179 条空谓词事实，179 条全部拿得出原文说法。**
+Now the predicate is dropped, keeping subject, object, time, and evidence, with the original word kept in `fact_evidence.proposed_predicate`, recovered for display by `fact_surface_predicate()` ([0010](0010-no-relation-is-no-relation.md)). Checked for silent data loss: **of the 179 facts returned to an empty predicate, all 179 still had their original wording recoverable.**
 
-## 五、剩下的不是抽取的错
+## Fifth: what remains is not an extraction error
 
-- **具化建模缺口**（`amount` 13 / `target` 8 / `participant` 5）：schema.org 用中间
-  节点建模（Action / LoanOrCredit / Offer），我们是扁平二元关系。
-- **同名词**（`affected_by` / `competitor` / `uses_device`）：包里有很多名字通用、
-  含义狭窄的词，按名字或向量相似度挑必然撞上。跟 `Researcher` 被拿来标人同源。
+- **A gap in modeling with intermediate nodes** (`amount` 13, `target` 8, `participant` 5): schema.org models these through an intermediate node (Action, LoanOrCredit, Offer); our model uses flat binary relations.
+- **Reused, ambiguous names** (`affected_by`, `competitor`, `uses_device`): the pack contains many generically named, narrowly scoped terms, and picking by name or vector similarity will inevitably collide with them — the same root cause behind `Researcher` being used to label a person.
 
-**这两类是本体包的本质成本**，0008 该记进去：**包的代价不在提示词长度，在选择难度。**
+**Both belong to the real cost of using an ontology pack**, and 0008 should record it: **a pack's cost is not prompt length, it is the difficulty of choosing.**
 
-### 为什么不引入更强的建模语言
+### Why we did not adopt a stronger modeling language
 
-数据模型**已经支持**中间节点——`entities` + `facts` 就是属性图，
-`[某轮融资] --amount--> €105M` 今天就能存，库里也确实有 10 个 `event`、
-9 个 `monetary_amount` 实体。卡住的不是表达力。
+The data model **already supports** intermediate nodes — `entities` plus `facts` is already a property graph, and `[a funding round] --amount--> €105M` can already be stored; the base already holds 10 `event` entities and 9 `monetary_amount` entities. Expressiveness is not the blocker.
 
-卡住的是**提示词的规则 1 与 2**：「用文中写出的规范全名」+「每条事实的主宾都必须
-出现在 entities 里」。而一轮融资在原文里**没有名字**——要满足签名就得凭空造一个实体，
-而提示词从头到尾在教它不要造。**模型做的是对的。**
+The real blocker is **prompt rules 1 and 2**: "use the canonical full name as written in the text" and "every fact's subject and object must appear in `entities`." A funding round often **has no name at all** in the source text — satisfying the signature would mean inventing an entity out of nothing, while the prompt spends its entire length teaching the model not to do exactly that. **The model's behavior here is correct.**
 
-真要支持具化，动的是这两条规则的地基，还得给无名节点一套命名与去重办法
-（同一轮融资在两篇文章里怎么认成一个？它没有名字可比）——那是实体消解的新问题。
+Supporting real reification means changing the foundation of those two rules, and also designing a naming and deduplication scheme for nameless nodes (how do two mentions of the same funding round, in two different articles, get recognized as one, with no name to compare?) — that is a new problem for entity resolution.
 
-判据应该是**限定词本身需不需要被查询**：「2024 年 A 轮里由 General Catalyst
-领投的公司有哪些」——那个「领投」挂在融资轮上。**今天问不了这种问题，那才是该做的信号**，
-而不是「schema.org 这么建模所以我们也要」。
+The real test should be **whether a qualifier itself needs to be queryable**: "which companies had a Series A round in 2024 led by General Catalyst" — "led by" attaches to the funding round itself. **That kind of question cannot be answered today, and that gap is the signal that should drive this work** — not "schema.org models it this way, so we should too."
 
-## 六、顺带修掉的两处
+## Sixth: two more fixes along the way
 
-**领头的轻动词不算区别**：`has_funding` 与 `funding` 是同一个关系。实测空谓词里
-`has_funding` ×4 落空而本体有 `funding`，`product` ×2 落空而本体有 `has_product`。
-过度归并不会造成错配——撞车即作废，最坏退回「匹配不上」。
+**A leading light verb should not count as a real difference**: `has_funding` and `funding` are the same relation. Measured among empty-predicate facts: `has_funding` failed to match ×4 even though the ontology has `funding`; `product` failed to match ×2 even though the ontology has `has_product`. Merging too aggressively here carries little risk — a bad merge just fails cleanly and falls back to "no match," nothing worse.
 
-**「实体名」是一句话时不该造成实体**。实测 421 个实体里 76 个无类型，最长的 111 字符
-是一整个从句。守卫本来就有（`> 100 字符` 就 `continue`），但**只装在声明实体那条路上**，
-而未声明的主宾会绕过去直接 `resolve()` 造实体——**前门有锁，后门开着**。而且那个
-`continue` 是静默的，正是 `drop_signal` 当初为之而建的七处之一。
+**A whole sentence should not be treated as an entity name.** Measured: of 421 entities, 76 had no type, and the longest name, at 111 characters, was a full subordinate clause. A guard already existed (`continue` past 100 characters), but **it only ran on the path for declared entities** — an undeclared subject or object skipped straight to `resolve()` and created an entity anyway. **The front door was locked; the back door was open.** And that `continue` was silent — exactly the kind of case `drop_signal` was built to catch, one of seven such places.
 
-判据改成**词数 + 限定动词**而不是字符数：`US District Court for the Northern District
-of California`（57 字符）是真实体，`removal was driven by growing discontent and
-distrust with Altman`（65 字符）是从句——字符数分不开，**谓语分得开**。
+The rule changed to **word count plus a finite verb**, instead of a character count: "US District Court for the Northern District of California" (57 characters) is a real entity; "removal was driven by growing discontent and distrust with Altman" (65 characters) is a clause — character count cannot tell them apart, **a finite verb can.**
 
-效果：最长实体名 111 → 57 字符（57 那个正是上面那个法院），无类型实体 76 → 60。
-被挡下的全是真句子，没有误伤。
+Result: the longest entity name dropped from 111 to 57 characters (the 57-character one is that same court), and untyped entities dropped from 76 to 60. Everything the guard blocked was a real sentence; nothing legitimate was caught by mistake.
 
-**孤点（一条事实都没有的实体）14.0% → 17.5%，但这不能归因于守卫**：守卫总共只挡了
-个位数，而孤点多了 14 个，更可能是跑次方差（两次跑的模型输出本来就不同，
-后一次还中途重启过、被回收的文档整篇重抽）。孤点的真实成因是另一回事——
-**模型在 `entities` 里声明了实体却没产出用到它的事实**，孤点列表里是法院、SEC、
-特斯拉总部这些正当实体。这个比例值得单独记，但它跟这次的守卫无关。
+**Isolated entities (with zero facts attached) rose from 14.0% to 17.5%, but this cannot be credited to the guard**: the guard blocked only a handful of entities total, while isolated entities grew by 14 — more likely run-to-run variance (model output differs between runs even on identical input, and this run also restarted mid-way, causing a reclaimed document to be re-extracted whole). The real cause of isolated entities is a separate issue — **the model declared an entity in `entities` but produced no fact using it** — the isolated list contains legitimate entities like a court, the SEC, and Tesla's headquarters. This ratio deserves its own record, but it is unrelated to this guard.
 
-## 待做
+## To do
 
-- **写入时的守卫挡不住写入之后的改动**：实体合并会把主语换成另一个类型的实体，
-  于是事实「变成」违反。实测 6 条残留里 4 条如此。要治得把同样的检查放进合并路径。〔仍未做：`merge_entities` 只做互指事实作废、主宾改指、SPO 去重，全程没有 domain / range 复核。〕
-- 另外 2 条残留（`Stability AI Ltd`、`Colossus 2 data center`）没有合并也没有改类型，
-  **原因未查明**。
-- 导入本体包时过滤掉需要中间节点才能用的关系（domain 全是 `Action`/`Offer`/
-  `LoanOrCredit` 这类具化壳的），它们铺给模型只会产出违反。〔仍未做。〕
-- **（2026-09-02 补）`bootstrap_ontology.rs` 开头的模块注释仍在说「新建的库只有 10 个默认关系……降级成 related_to」**，那是三次退场之前的世界。不属于本篇，但与本条线同源，该改。
+- **A write-time guard cannot catch a change made after the fact**: merging two entities can replace a subject with an entity of a different type, turning a fact into a violation after the fact. 4 of 6 remaining violations trace to this. Fixing it means putting the same check inside the merge path too. (Still not done: `merge_entities` only retires mutually-referencing facts, redirects subject/object, and deduplicates by SPO — it never re-checks domain or range.)
+- The other 2 remaining violations (`Stability AI Ltd`, `Colossus 2 data center`) involved no merge and no retype — **the cause is still unknown.**
+- When importing an ontology pack, filter out relations that only make sense with an intermediate node (whose domain is entirely reification shells like `Action`, `Offer`, or `LoanOrCredit`) — listing them for the model only produces violations. (Still not done.)
+- **(Added 2026-09-02)** The module comment at the top of `bootstrap_ontology.rs` still states "a new base has only 10 default relations … downgrades to related_to" — describing a world that ended three retirements ago. Outside the scope of this document, but from the same line of work, and it should be fixed.

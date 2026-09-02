@@ -1,14 +1,19 @@
--- 语义层：问数的数据源，与「业务概念 → 数据资产」的口径映射。
+-- The semantic layer: data sources for Ask-the-Data, and the mapping between a business
+-- concept and a data asset.
 --
--- 数据源两层模型：
--- 系统层注册连接（凭据集中、跨 KB 复用），知识库层挂载授权（问数权限跟 KB 走）。
+-- Data sources use a two-layer model:
+-- a registered connection at the system layer (credentials live in one place, shared
+-- across knowledge bases), and a mount grant at the knowledge base layer (Ask-the-Data
+-- permission follows the knowledge base).
 
 CREATE TABLE data_sources (
     id           UUID PRIMARY KEY,
     name         TEXT NOT NULL UNIQUE,
-    -- 首发仅 postgres；mysql/clickhouse 后续加驱动
+    -- The first release supports postgres only; mysql and clickhouse drivers can follow later.
     engine       TEXT NOT NULL CHECK (engine IN ('postgres')),
-    -- 连接串（含凭据）。与 llm_settings 的 api key 同待遇：静态加密尚未实现，见 README 的 Status 段
+    -- The connection string, including credentials. This gets the same treatment as the
+    -- API key in llm_settings: encryption at rest is not implemented yet. See the Status
+    -- section of the README.
     conn_string  TEXT NOT NULL,
     created_by   UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -16,7 +21,8 @@ CREATE TABLE data_sources (
     last_test_ok BOOLEAN
 );
 
--- KB 挂载：本库的 Chat 才能问到挂载的源
+-- A mount grant: only through this grant can chat in this knowledge base query the
+-- mounted source.
 CREATE TABLE kb_data_sources (
     kb_id          UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     data_source_id UUID NOT NULL REFERENCES data_sources(id) ON DELETE CASCADE,
@@ -24,57 +30,70 @@ CREATE TABLE kb_data_sources (
     PRIMARY KEY (kb_id, data_source_id)
 );
 
--- 语义层的「概念 → 数据资产」映射搬出本体，见 docs/decisions/0011。
+-- The semantic layer's mapping from a concept to a data asset lives outside the ontology.
+-- See docs/decisions/0011.
 --
--- 从前它是一条 `mapped_to` 事实：主语是概念实体，宾语是塞在 `object_value`
--- 里的一份 JSON 配置，而 `mapped_to` 本身是 `relation_types` 里的一行，
--- 与 `works_at` 并列。
+-- An earlier design stored this as a `mapped_to` fact: the subject was the concept
+-- entity, and the object was a JSON configuration packed into `object_value`, with
+-- `mapped_to` itself as a row in `relation_types`, next to a relation like `works_at`.
 --
--- 拆开的理由，三条都不是洁癖：
+-- Three separate reasons justify pulling it out, none of them a matter of style:
 --
--- 1. **它不是关于世界的断言。** 本体回答「世界上有什么」，这个回答的是
---    「这个数在我们的数据库里怎么算」。与 0009 说「concept 是控制流不是词表」、
---    0010 说「related_to 是兜底不是关系」是同一句话的第三次应用。
+-- 1. **This is not a claim about the world.** The ontology answers "what exists in the
+--    world"; this table answers "how does this number compute in our database." This is
+--    the third application of one rule: ADR 0009 says concept is control flow, not
+--    vocabulary, and ADR 0010 says related_to is a fallback, not a relation.
 --
--- 2. **「确认」这个动作已经在违反账本的地基。** `confirm_fact` 是
---    `UPDATE facts SET confidence = 1.0`——原地改。而账本是 append-only 的，
---    纠正事实要插新行 + supersedes，因为认知变更本身是信息（0001 P0）。
---    确认口径改的不是认知，是「这条配置生效了没有」。一个需要原地改状态的
---    东西住在一张不许原地改的表里，本身就是它不合身的证据。
+-- 2. **The "confirm" action already breaks the ledger's foundation.** confirm_fact runs
+--    `UPDATE facts SET confidence = 1.0`, an update in place. The ledger is append-only:
+--    correcting a fact means inserting a new row with a supersedes link, because a change
+--    in understanding is itself information (criterion 0 of ADR 0001). Confirming a
+--    mapping does not change understanding; it changes whether this configuration is
+--    active. Something that needs an in-place status change does not belong on a table
+--    that forbids in-place changes; that mismatch is itself evidence this design does not fit.
 --
--- 3. **形状对不上。** 真正的字段是 source / table / expr / sql / unit /
---    summary，全塞在一个 JSONB 里：查不动（「哪些概念映射到了 orders」要扒
---    JSON）、约束不了（唯一性粒度 (概念,源) 藏在 object_value 内部，
---    数据库管不到，今天靠流程而不是约束）。
+-- 3. **The shape does not match.** The real fields are source, table, expr, sql, unit,
+--    and summary, all packed into one JSONB value. That makes them hard to query
+--    ("which concepts map to orders" means digging through JSON) and impossible to
+--    constrain (uniqueness at the granularity of (concept, source) sits inside
+--    object_value, where the database cannot enforce it; today this rule holds only
+--    through process, not through a constraint).
 
 CREATE TABLE concept_mappings (
     id         UUID PRIMARY KEY,
     kb_id      UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
-    -- 被映射的业务概念（Metric / Dimension 那类实体）
+    -- The business concept being mapped (an entity of a type such as Metric or Dimension).
     concept_id UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    -- 挂载的数据源。**它进主键**：同一个概念在不同源上有不同定义是有意支持的，
-    -- 而同一个概念在同一个源上只该有一条——这条从前靠确认流程显式闭合，
-    -- 现在由数据库管
+    -- The mounted data source. **This column is part of the primary key on purpose.** The
+    -- same concept having a different definition on a different source is supported by
+    -- design; the same concept should have only one definition on the same source. An
+    -- earlier version closed this rule through the confirmation process; the database
+    -- enforces it now.
     source     TEXT NOT NULL,
-    -- 怎么算。字段展开成列而不是继续塞 JSON——它们是这张表存在的理由
+    -- How the value computes. These fields are separate columns, not packed into JSON,
+    -- because they are the reason this table exists.
     table_name TEXT,
     expr       TEXT,
     sql        TEXT,
     unit       TEXT,
     summary    TEXT,
-    -- 派生指标（比如「转化率 = 成交数 / 访问数」）：算出来的，不是表里的列
+    -- A derived metric (for example, "conversion rate = orders / visits"): a computed
+    -- value, not a stored column.
     derived    BOOLEAN NOT NULL DEFAULT FALSE,
 
-    -- **状态而不是置信度。** 从前借事实的 confidence 表达「提议 0.6 / 确认 1.0」，
-    -- 那是把一个二值状态编码成浮点数，还顺带让它落进「低置信事实」那一档。
-    -- 这里说清楚它是什么
+    -- **This is a status, not a confidence score.** An earlier design borrowed a fact's
+    -- confidence column to express "proposed = 0.6 / confirmed = 1.0," which encoded a
+    -- two-valued state as a float, and also let a proposed mapping fall into the
+    -- "low-confidence fact" review bucket by mistake. This column states plainly what it is.
     status     TEXT NOT NULL DEFAULT 'proposed'
                CHECK (status IN ('proposed', 'confirmed', 'rejected')),
-    -- NULL = 还没人表态。确认与拒绝都留痕：拒绝过的不该被下一轮探索刷回待看。
+    -- NULL means no one has decided yet. Both confirming and rejecting leave a record; a
+    -- rejected mapping must not be surfaced again as pending by the next exploration pass.
     --
-    -- 裸外键，与 `entity_merges.merged_by`、`ontology_proposals.decided_by`
-    -- 那几处一致——**用户是软删除的，生产代码里没有 `DELETE FROM users`**，
-    -- 所以这条外键的删除规则永远不会被触发，而归因保住了。
+    -- This foreign key has no ON DELETE rule, matching entity_merges.merged_by and
+    -- ontology_proposals.decided_by. **A user account is deactivated, not deleted; the
+    -- production code has no `DELETE FROM users` statement,** so this foreign key's
+    -- delete rule never triggers, and attribution stays intact.
     decided_by UUID REFERENCES users(id),
     decided_at TIMESTAMPTZ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -83,17 +102,21 @@ CREATE TABLE concept_mappings (
     UNIQUE (kb_id, concept_id, source)
 );
 
--- 问数只读确认过的（chat.rs 注入 system prompt），而 Review 只捞待表态的。
--- 两条查询都按 kb + status 走
+-- Ask-the-Data reads only confirmed mappings (chat.rs injects them into the system
+-- prompt), and Review reads only the mappings still waiting for a decision. Both queries
+-- filter by knowledge base and status.
 CREATE INDEX concept_mappings_status_idx ON concept_mappings (kb_id, status);
 
--- 口径演变留痕。**不做双时态**：口径没有「有效时间」与「记录时间」两条轴，
--- 它只有「什么时候生效的」一条。硬套账本那套是把复杂度搬过来，不是解决它。
+-- A record of how a mapping changed over time. **This table does not use two time
+-- axes.** A mapping has no separate "valid time" and "recorded time"; it has only one
+-- axis, "when this took effect." Forcing the ledger's bitemporal pattern onto it would
+-- move complexity here instead of solving anything.
 CREATE TABLE concept_mapping_revisions (
     id         UUID PRIMARY KEY,
     mapping_id UUID NOT NULL REFERENCES concept_mappings(id) ON DELETE CASCADE,
-    -- 改之前那一版的全文。存快照而不是差异：读的时候要的是「当时是什么」，
-    -- 而差异要从头重放才能回答这个问题
+    -- The full previous version, before the change. This stores a snapshot, not a diff.
+    -- Reading this table means asking "what was this at the time," and a diff would need
+    -- a full replay from the start to answer that question.
     before     JSONB NOT NULL,
     changed_by UUID REFERENCES users(id),
     changed_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -102,8 +125,10 @@ CREATE TABLE concept_mapping_revisions (
 CREATE INDEX concept_mapping_revisions_idx
     ON concept_mapping_revisions (mapping_id, changed_at DESC);
 
--- 旧的 mapped_to 事实不迁移：仓库尚未发布，库里都是 mock 知识（与 #125 同）。
--- 它们留在账本里不碍事——`confirmed_mappings` 那条查询会随代码一起改掉，
--- 于是再没有人读它们。
+-- The old mapped_to facts are not migrated. This repository has not shipped a release
+-- yet, and every knowledge base holds only mock knowledge (the same situation as issue #125).
+-- Leaving them in the ledger causes no harm: the confirmed_mappings query changes along
+-- with the rest of the code, and after that, nothing reads these old rows again.
 --
--- **真发布之后就没有这个便利了**，写在这里免得下次照抄。
+-- **This shortcut will not be available after a real release.** This note exists so no
+-- one copies this shortcut for a future migration.

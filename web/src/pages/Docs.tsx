@@ -1,5 +1,7 @@
-/* 内置文档：随应用打包（私有部署离线可用），版本与部署一致。
-   公开路由——不依赖会话，登录前也可读（开发者接接口时未必有账号）。 */
+/* Built-in docs: bundled with the app, so they work offline in a private
+   deployment, and their version always matches the deployment version.
+   This is a public route: it does not depend on a session, so a reader
+   can view it before login. An engineer integrating with the API may not have an account yet. */
 import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ReactMarkdown from "react-markdown";
@@ -13,12 +15,13 @@ import { UserMenu } from "./UserMenu";
 import { usePageTitle } from "../useTitle";
 import ingestMd from "../docs/ingest.md?raw";
 
-/** 文档清单：slug → 标题 + 内容（构建期打进 bundle） */
+/** The doc list: each slug maps to a title and content, bundled at build time. */
 const DOCS: { slug: string; title: string; body: string }[] = [
   { slug: "ingest", title: "Ingest interfaces", body: ingestMd },
 ];
 
-/** 全文检索（客户端，文档已在 bundle 里）：命中行 → 文档 + 以命中词为中心的摘录 */
+/** Full-text search, run on the client, since the docs are already in
+ *  the bundle. Each match returns the document and a snippet centered on the matched term. */
 function searchDocs(q: string): { slug: string; title: string; snippet: string }[] {
   const needle = q.trim().toLowerCase();
   if (needle.length < 2) return [];
@@ -28,7 +31,7 @@ function searchDocs(q: string): { slug: string; title: string; snippet: string }
       const cleaned = line.replace(/[#`*|>-]/g, " ").replace(/\s+/g, " ").trim();
       const idx = cleaned.toLowerCase().indexOf(needle);
       if (idx < 0) continue;
-      // 摘录窗口以命中词为中心，避免命中被 90 字截断截丢
+      // The snippet window centers on the matched term, so a 90-character truncation never cuts off the match itself.
       const start = Math.max(0, idx - 30);
       const snippet = (start > 0 ? "…" : "") + cleaned.slice(start, start + 100);
       hits.push({ slug: d.slug, title: d.title, snippet });
@@ -38,7 +41,7 @@ function searchDocs(q: string): { slug: string; title: string; snippet: string }
   return hits;
 }
 
-/** 摘录内高亮命中词（不区分大小写，全部命中都标） */
+/** Highlights the matched term inside a snippet, case-insensitively, marking every match. */
 function Highlighted({ text, q }: { text: string; q: string }) {
   const needle = q.trim();
   if (!needle) return <>{text}</>;
@@ -47,7 +50,7 @@ function Highlighted({ text, q }: { text: string; q: string }) {
     <>
       {parts.map((p, i) =>
         p.toLowerCase() === needle.toLowerCase() ? (
-          /* 命中词用警示琥珀：结果列表里一眼定位到匹配处 */
+          /* The matched term uses a warning-amber color, so a reader can spot the match in the results list at a glance. */
           <mark
             key={i}
             className="rounded-[3px] bg-[rgba(242,182,109,0.16)] px-0.5 text-[var(--u-warn)]"
@@ -62,7 +65,7 @@ function Highlighted({ text, q }: { text: string; q: string }) {
   );
 }
 
-/** 标题 → 锚点 id（TOC 与正文用同一函数保证对得上） */
+/** Converts a heading to an anchor id. The table of contents and the body use this same function, so their ids always match. */
 function slugify(s: string): string {
   return s
     .toLowerCase()
@@ -70,7 +73,7 @@ function slugify(s: string): string {
     .replace(/(^-+|-+$)/g, "");
 }
 
-/** React children → 纯文本（h2/h3 里可能嵌 code/strong） */
+/** Converts React children to plain text. An h2 or h3 heading may nest a `code` or `strong` element. */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function textOf(children: any): string {
   if (typeof children === "string") return children;
@@ -80,7 +83,7 @@ function textOf(children: any): string {
   return "";
 }
 
-/** 从 markdown 源提取 h2/h3 目录 */
+/** Extracts an h2/h3 table of contents from the markdown source. */
 function tocOf(body: string): { id: string; text: string; level: 2 | 3 }[] {
   const out: { id: string; text: string; level: 2 | 3 }[] = [];
   for (const line of body.split("\n")) {
@@ -105,14 +108,15 @@ export function DocsPage() {
   const toc = tocOf(doc.body);
   const mainRef = useRef<HTMLElement>(null);
   const [activeHeading, setActiveHeading] = useState<string | null>(null);
-  // 标题：`Utopia | {文章名}`——Charter 是门脸字标，标题直接给文章
+  // Title: `Utopia | {article name}`. "Charter" is the section wordmark, and the page title names the article directly.
   usePageTitle(S.app.name, doc.title);
-  // 公开页也感知登录态：已登录给用户菜单，未登录给 Sign in
+  // This public page still checks the login state: a signed-in user sees the user menu, and a signed-out user sees "Sign in".
   const me = useQuery({ queryKey: ["me"], queryFn: api.me, retry: false });
   const health = useQuery({ queryKey: ["health"], queryFn: api.health, staleTime: Infinity });
 
-  // 滚动跟随：视口上沿之上最近的标题为当前小节；
-  // 滚到底强制激活最后一节（短末节永远越不过判定线）
+  // Scroll spy: the current section is the nearest heading above the
+  // viewport's top edge. At the bottom of the scroll, this forces the
+  // last section active, because a short final section might never cross the threshold line.
   const onScrollSpy = () => {
     const main = mainRef.current;
     if (!main) return;
@@ -143,7 +147,8 @@ export function DocsPage() {
     };
   }, [q]);
 
-  // 键盘呼起：⌘K / Ctrl+K 任何时候生效；`/` 仅在焦点不在输入框时（别劫持打字）
+  // Keyboard shortcut to open search: Cmd+K or Ctrl+K works at any time.
+  // The `/` shortcut only works when focus is not in a text field, so it does not interrupt typing.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = document.activeElement;
@@ -170,7 +175,8 @@ export function DocsPage() {
     <div className="h-screen flex flex-col overflow-hidden">
       <header className="glass-strong relative z-40 border-x-0 border-t-0 h-14 shrink-0 flex items-center px-5">
         <SectionMark text={S.docs.brand} title={S.docs.backTitle} />
-        {/* 居中搜索：检索打包在本地的全部文档；宽度对齐正文栏（max-w-3xl 去掉 px-8） */}
+        {/* Centered search: this searches all locally bundled docs. Its
+            width matches the body column (`max-w-3xl` minus `px-8`). */}
         <div
           ref={searchRef}
           className="absolute left-1/2 -translate-x-1/2 w-[min(44rem,55vw)]"
@@ -188,8 +194,9 @@ export function DocsPage() {
               value={q}
               onChange={(e) => setQ(e.target.value)}
             />
-            {/* 快捷键提示：输入中不占视线。⌘ 用 lucide 图标；
-                Ctrl 无图形符号（⌘ 是 Mac 专属键符），Windows 规范写法就是文字 */}
+            {/* Shortcut hint: this stays out of the way while typing. On
+                Mac, it uses a lucide icon for Cmd. Ctrl has no standard
+                icon, unlike the Mac-only Cmd symbol, so Windows shows the word "Ctrl" instead. */}
             {!q && (
               <kbd className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 flex items-center gap-1 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-sans text-[10px] text-neutral-600">
                 {IS_MAC ? <Command size={9} /> : <span>Ctrl</span>}
@@ -222,7 +229,8 @@ export function DocsPage() {
           )}
         </div>
 
-        {/* 右侧：显式返回（与字标双路回城）+ GitHub·版本胶囊 + 登录态 */}
+        {/* Right side: an explicit back link (a second way to return home,
+            besides the wordmark), a GitHub and version pill, and the login state. */}
         <div className="ml-auto flex items-center gap-1.5">
           <Link
             to="/"
@@ -255,7 +263,8 @@ export function DocsPage() {
         </div>
       </header>
 
-      {/* 整页滚动（滚动条贴窗口最右），侧栏 sticky 钉住——正规文档站布局 */}
+      {/* The whole page scrolls, with the scrollbar against the window's
+          right edge, and the side rails stay sticky. This matches a standard docs site layout. */}
       <main
         ref={mainRef}
         onScroll={onScrollSpy}
@@ -279,10 +288,16 @@ export function DocsPage() {
             ))}
           </aside>
 
-          {/* 上下都留足空白：标题不顶着头，末段内容能滚到屏幕中部——人读屏幕中间。
-              排版交给官方 @tailwindcss/typography（prose，16px 基准），
-              自定义只剩：标题锚点 id、外链新开、表格横向滚动容器 */}
-          {/* prose-neutral：默认 gray 阶带蓝相（oklch 258°），违反 chrome 零色偏 */}
+          {/* Enough space stays above and below the content: the heading
+              does not touch the top, and the last section can scroll to
+              the middle of the screen, where a reader's eyes rest.
+              Typography comes from the official @tailwindcss/typography
+              plugin (`prose`, at a 16px base size). The only custom
+              additions are: heading anchor ids, opening external links in
+              a new tab, and a horizontal scroll container for tables. */}
+          {/* This uses `prose-neutral`, because the default gray scale has
+              a slight blue tint (258 degrees in oklch), which would
+              violate the "no color bias in UI chrome" rule. */}
           <article className="prose prose-neutral prose-invert prose-headings:scroll-mt-6 prose-code:before:content-none prose-code:after:content-none flex-1 min-w-0 max-w-3xl mx-auto px-8 pt-16 pb-[40vh]">
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
@@ -298,7 +313,7 @@ export function DocsPage() {
                   </h3>
                 ),
                 a: (p) => <a target="_blank" rel="noreferrer" {...p} />,
-                // 不加 u-scroll：overscroll-contain 会把竖向滚轮困在块内，页面滚不动
+                // This does not add `u-scroll`: `overscroll-contain` would trap vertical scrolling inside this block, and the page could not scroll.
                 table: (p) => (
                   <div className="overflow-x-auto">
                     <table {...p} />
@@ -310,7 +325,7 @@ export function DocsPage() {
             </ReactMarkdown>
           </article>
 
-          {/* 右侧目录：sticky 钉住，与正文标题同一水平线起头 */}
+          {/* The right-side table of contents stays sticky, and starts at the same horizontal line as the body heading. */}
           {toc.length > 0 && (
             <aside className="hidden lg:block w-64 shrink-0 sticky top-0 pt-16 pr-8">
               <nav className="space-y-0.5">

@@ -1,53 +1,66 @@
--- 个人访问令牌：给 MCP 客户端一把长命的钥匙（见 docs/decisions/0014）。
+-- Personal access tokens: a long-lived key for an MCP client (see docs/decisions/0014).
 --
--- **它以这个人的身份行事，但不必是这个人的全部。**
+-- **A token acts as this person, but it does not have to carry all of that person's power.**
 --
---     有效权限 = 这个人的角色 ∩ 这枚令牌的 scope
+--     effective permissions = this person's role INTERSECTED WITH this token's scope
 --
--- 交集不是并集：viewer 的令牌勾上 write 也还是只读。scope 是上限，不是授权。
+-- This is an intersection, not a union: a viewer's token with the write flag checked is
+-- still read-only. Scope sets an upper bound; it does not grant new access.
 --
--- 为什么不发机器令牌（0014 里留痕的那条岔路）：机器身份要引入第三套授权模型，
--- 而且 `audit_events.actor_id` 会多出一类「不是任何人做的」记录——账本存在的
--- 理由正是「谁在什么时候认下了什么」。
+-- Why this migration does not issue machine tokens (a path considered and set aside in
+-- ADR 0014): a machine identity would introduce a third authorization model, and
+-- audit_events.actor_id would gain a new kind of row that no person performed — and the
+-- ledger exists specifically to answer "who confirmed what, and when."
 CREATE TABLE personal_tokens (
     id           UUID PRIMARY KEY,
-    -- **有外键且级联**，与 `audit_events.actor_id` 的裸 UUID 相反：
-    -- 台账要活得比用户久，钥匙不该。人没了，他的钥匙就该一起没
+    -- **This foreign key cascades, the opposite of audit_events.actor_id's plain UUID.**
+    -- The ledger must outlive a user; a key should not. When a person is gone, their key
+    -- should be gone with them.
     user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    -- 人自己起的名字，"我的笔记本"。撤销时要认得出撤的是哪一把
+    -- A name the person chose themselves, such as "my laptop." This lets them recognize
+    -- which key they are revoking.
     name         TEXT NOT NULL,
 
-    -- **哈希存，与 `sources.ingest_token` 的明文相反。**
+    -- **This column stores a hash, the opposite of sources.ingest_token's plain text.**
     --
-    -- 那一条的理由是「DB 失守时文档本体早已泄露，哈希化没有额外收益」，
-    -- 而它成立是因为 ingest_token 只能**往里推文档**。这一把不一样：它经
-    -- `query_data` 能读出 Utopia 之外的生产库。数仓在另一台机器上、装着另一批
-    -- 数据，不该跟着 Utopia 的库一起丢。**爆炸半径不同，所以存法不同。**
+    -- That column's reasoning was "if the database is compromised, the document content
+    -- is already exposed, so hashing adds no protection," and that holds because
+    -- ingest_token can only **push documents in**. This key is different: through
+    -- query_data, it can read from a production database outside Utopia entirely. That
+    -- data warehouse runs on a different machine, holding a different set of data, and it
+    -- must not be exposed just because Utopia's own database was. **The blast radius
+    -- differs, so the storage method differs too.**
     token_hash   TEXT NOT NULL UNIQUE,
-    -- 给人认的前缀（`utp_ab12…`）。列表里要能一眼对上配置文件里那一串，
-    -- 而不必把整条明文留下来
+    -- A prefix for a person to recognize (utp_ab12...). The list view can match this
+    -- against the string in a configuration file, without keeping the full plain-text token around.
     token_prefix TEXT NOT NULL,
 
-    -- read = 只读工具；write = 额外放开 remember。**默认只读**：
-    -- 要让 agent 写进账本，得显式勾
+    -- read = read-only tools; write = also allows remember. **This defaults to
+    -- read-only**; letting an agent write to the ledger needs an explicit choice.
     scope        TEXT NOT NULL DEFAULT 'read' CHECK (scope IN ('read', 'write')),
-    -- 限定到哪几个库。NULL = 这个人能进的全部。
-    -- 裸 UUID 数组不是懒：库删了这一项只是失效，不该把令牌整个删掉
+    -- Restricts this token to specific knowledge bases. NULL means every base this
+    -- person can access. This is a plain UUID array, not out of convenience: when a base
+    -- is deleted, this entry simply loses effect; deleting the base must not delete the token entirely.
     kb_ids       UUID[],
 
-    -- NULL = 不过期。界面默认给 90 天——不过期是能选的，但不是缺省
+    -- NULL means no expiration. The interface defaults new tokens to 90 days; no
+    -- expiration is an available choice, not the default.
     expires_at   TIMESTAMPTZ,
-    -- 「这把还在用吗」。撤之前要答得出这个问题，否则没人敢撤
+    -- Answers "is this token still in use." A person needs this answer before revoking a
+    -- token, or no one will feel safe revoking anything.
     last_used_at TIMESTAMPTZ,
-    -- **撤销不删行**：撤过这件事本身要留痕。删了行，「这把钥匙存在过」
-    -- 就查不到了，而那正是事后追查要问的第一件事
+    -- **A revoke does not delete the row.** The fact that a revoke happened must leave
+    -- its own trace. Deleting the row would make "this key existed" unanswerable, and
+    -- that is the first question a later investigation asks.
     revoked_at   TIMESTAMPTZ,
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- 校验是热路径：**每次工具调用都要查一遍**，不是握手时查一次。
--- 那是 0014_data_source_grants 的教训——列表过滤不是守卫，MCP 的对应形态是
--- 「信任一整条连接的生命周期」，而 revoked_at 在中途被写上时必须立刻生效
+-- Validation is a hot path: **every tool call checks this, not just once at the
+-- handshake.** This follows the lesson of migration 0014_data_source_grants: filtering a
+-- list is not the same as guarding access. The equivalent mistake in MCP would be
+-- "trusting a connection for its entire lifetime," when a revoked_at value written
+-- mid-connection must take effect immediately.
 CREATE UNIQUE INDEX personal_tokens_hash_idx ON personal_tokens (token_hash);
--- 「我发过哪几把」：账户页按人列，最近发的在前
+-- "Which tokens did I issue": the account page lists them per person, most recent first.
 CREATE INDEX personal_tokens_user_idx ON personal_tokens (user_id, created_at DESC);

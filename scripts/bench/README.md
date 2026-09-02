@@ -1,52 +1,43 @@
-# 类型消解的测量台
+# Benchmark harness for entity resolution
 
-**每一组一个新库。** 这条规则是整个目录存在的理由。
+**Use a new knowledge base for each run.** This rule is the reason this directory exists.
 
-此前连着三轮在同一个库上调检索，而那个库带着前几轮的改类结果——容易的实体早已
-精化，拒绝理由里直接写着 `already correctly typed as pharmacy`。后两轮的数字跟
-第一轮根本不可比，却被当成依据改了两次代码。复用一个库省下的几分钟，换来的是
-一整段无效的结论。
+A past test ran three rounds of retrieval tuning on the same knowledge base. That base still held the type changes from the earlier rounds. The easy entities were already refined. Their rejection reasons already said `already correctly typed as pharmacy`. The numbers from the later rounds could not compare to the first round. The team used those numbers to change code twice anyway. Reusing a base saved a few minutes. It also produced a set of invalid conclusions.
 
-## 跑一组
+## Run a test
 
 ```
 node scripts/bench/run.mjs --corpus pharma --label seeds-only
 node scripts/bench/run.mjs --corpus pharma --ontology /tmp/schemaorg.ttl --label schemaorg
 ```
 
-前置：`utopia-server` 已启动、连着一个能写的库、工作区配好了对话与嵌入模型。
-环境变量见 `run.mjs` 头部。
+Before you run a test:
+1. Start `utopia-server`.
+2. Connect it to a knowledge base you can write to.
+3. Set the chat model and the embedding model for the workspace.
 
-## 目录
+`run.mjs` lists the environment variables at the top of the file.
 
-- `corpora/*.json` —— 固定语料。**实体跨文档反复出现**是刻意的：单篇语料里每个
-  实体只有一两条事实，画像基本只剩名字，量不出消解的真实水平。
-- `truth/*.json` —— 每个实体期望落到哪个类。key 是名字的一个足以认出它的片段
-  （抽取给的名字每次略有出入，全等匹配会把这种变化算成失败）；值是可接受的类，
-  任一命中算对。**空数组 = 本体里没有对得上的类，此时正确行为是不动它**。
-- `run.mjs` —— 一组：新建库 → 灌语料 → 可选导入本体 → 跑消解 → 打分。
-- `fetch-ai-timeline.mjs` —— 抓条目的**当前版**（`prop=extracts`）。
-- `fetch-wiki-history.mjs` —— 抓**历史快照**（`action=parse&oldid`）。演认知时间靠它：
-  同一条目的多张快照按 `doc_time` 灌进去，图会真的改主意。
-- `subset-corpus.mjs` —— 从一份语料里挑几个条目做成新语料。**整条目取**，
-  因为 `supersedes` 只在同一条目的相邻快照之间发生，随机抽块会把时态那根轴废掉。
-- `subset.mjs` —— 把 schema.org 的 TTL 切成前 N 个类，给退化曲线用。
+## Directory contents
 
-## 读数怎么算
+- `corpora/*.json` — fixed test text. **The same entity appears across several documents on purpose.** A corpus with one document per entity gives each entity only one or two facts. Its profile is close to a bare name. That is not enough to measure resolution quality.
+- `truth/*.json` — the expected class for each entity. Each key is a short piece of the entity's name, enough to identify it. Extraction gives a slightly different name each time, so an exact match would count that variation as a failure. Each value lists the classes the system may return; any match in the list counts as correct. **An empty array means the ontology has no matching class. The correct action then is to leave the entity alone.**
+- `run.mjs` — runs one test: create a base, load the corpus, import an ontology if given, run resolution, and score the result.
+- `fetch-ai-timeline.mjs` — fetches the **current version** of an article (`prop=extracts`).
+- `fetch-wiki-history.mjs` — fetches **historical snapshots** of an article (`action=parse&oldid`). Use this script to test change over time. Load several snapshots of the same article by their `doc_time`, and the graph changes its own understanding.
+- `subset-corpus.mjs` — picks a few articles from a corpus and builds a new corpus from them. It takes **whole articles**, because `supersedes` links only connect adjacent snapshots of the same article. A random sample of pieces would remove the time axis from the test.
+- `subset.mjs` — cuts a schema.org TTL file down to its first N classes, for scaling tests.
 
-- `prompt_tokens_est` 是**本体段**的估算，不是整个提示词。实测 4.0 字符 ≈ 1 token
-  （377,735↔81,855、396,716↔99,041）。真实 token 数在 LLM 客户端里，穿出来要改
-  一路签名；这里要量的是"本体规模"，比例稳定就够用。
-- `for_review` 按**没改**算进 miss。它确实还没改——算成命中就是把人的活记在机器账上。
-- `absent` = 标准答案里有、但抽取压根没抽出这个实体。它不是消解的错，单独一栏。
+## How the score works
 
-## 标准答案会写错
+- `prompt_tokens_est` estimates the size of the **ontology section** of the prompt. It is not the size of the whole prompt. In tests, about 4.0 characters equal 1 token (measured at 377,735 characters to 81,855 tokens, and 396,716 to 99,041). The real token count lives inside the LLM client, and exposing it would need a change to several function signatures. This script only needs to track ontology size, and the ratio stays stable enough for that.
+- `for_review` items count as a miss. The system has not corrected them yet. Counting them as a hit would credit the system for work a person still has to do.
+- `absent` marks a case where the truth file lists an entity, but extraction never produced it. This is not a resolution error. It gets its own column.
 
-第一次跑就写窄了一个：`心血管健康论坛` 只写了 `business_event|event_series`，
-而系统给的 `conference_event` 是对的。**答案错了要改答案**——但要在结果出来之后
-才改、且写清楚为什么，否则这份答案就变成了"系统这次答了什么"的记录，量不出任何东西。
+## The truth file can be wrong
 
-## 加一个语料
+In an early run, one truth entry was too narrow. It listed only `business_event|event_series` for `Cardiovascular Health Forum`. The system's answer, `conference_event`, was correct. **When an answer is wrong, fix the answer.** Fix it only after you see the result, and write down why. Otherwise the truth file stops measuring anything. It becomes a record of what the system answered that time.
 
-两个文件：`corpora/x.json` 与 `truth/x.json`。语料换行业是有意的——同一套判断在
-两个领域上都成立，才谈得上不是过拟合到某一批词上。
+## Add a corpus
+
+Add two files: `corpora/x.json` and `truth/x.json`. Use a corpus from a new industry on purpose. The same resolution logic must hold across two different domains. That is how you know it is not overfit to one set of words.

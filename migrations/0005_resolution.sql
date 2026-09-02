@@ -1,12 +1,15 @@
--- 实体消解：同名≠同人。
--- 设计见 docs/DESIGN.md §4：名字只是候选召回线索，身份由上下文（画像向量 + 关系兼容性）决定；
--- 宁分勿合，灰区先落审核队列，LLM 攒批裁决在后台跑，人工终审兜底。
+-- Entity resolution: the same name does not mean the same person.
+-- See docs/DESIGN.md, section 4, for the design: a name is only a candidate lookup clue.
+-- Identity depends on context (a profile vector and relation compatibility). The system
+-- favors keeping entities separate over merging them. An unclear case goes to the review
+-- queue first. Batched LLM judgment runs in the background, with a person as the final check.
 
 
 
--- 消解审核队列：疑似同一实体的灰区对。
--- stage: adjudicating = 等 LLM 攒批裁决；human = LLM 不确定/未配模型，等人工终审。
--- status: pending → merged / kept。
+-- The resolution review queue: unclear pairs that may be the same entity.
+-- stage: adjudicating = waiting for a batched LLM judgment; human = the LLM was unsure, or
+-- no model is configured, so the pair waits for a person's final check.
+-- status: pending -> merged / kept.
 CREATE TABLE resolution_reviews (
     id         UUID PRIMARY KEY,
     kb_id      UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
@@ -26,7 +29,8 @@ CREATE UNIQUE INDEX resolution_reviews_pair_idx
 CREATE INDEX resolution_reviews_kb_pending_idx
     ON resolution_reviews (kb_id, created_at) WHERE status = 'pending';
 
--- LLM 裁决缓存：同一对（名字 + 上下文摘要哈希）不重复付费；same 为 NULL 表示模型也不确定
+-- A cache of LLM judgments: the same pair (name plus a hash of the context summary)
+-- does not incur a second model call. A NULL value for same means the model was also unsure.
 CREATE TABLE resolution_verdicts (
     kb_id      UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     pair_key   TEXT NOT NULL,
@@ -37,7 +41,8 @@ CREATE TABLE resolution_verdicts (
     PRIMARY KEY (kb_id, pair_key)
 );
 
--- 合并日志：记录被移动/作废的事实与目标实体画像快照，支持精确回滚
+-- The merge log: records the facts moved or invalidated, and a snapshot of the target
+-- entity's profile, so a merge can be reverted precisely.
 CREATE TABLE entity_merges (
     id                    UUID PRIMARY KEY,
     kb_id                 UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
@@ -46,13 +51,15 @@ CREATE TABLE entity_merges (
     moved_subject_facts   UUID[] NOT NULL DEFAULT '{}',
     moved_object_facts    UUID[] NOT NULL DEFAULT '{}',
     invalidated_facts     UUID[] NOT NULL DEFAULT '{}',
-    -- 合并后时态对账产生的修正行（成因是合并本身，回滚时随之撤销）
+    -- Correction rows produced by temporal reconciliation after the merge. The merge
+    -- itself caused these rows, so reverting the merge reverts them too.
     temporal_corrections  UUID[] NOT NULL DEFAULT '{}',
     target_profile_before vector,
     target_profile_n_before INTEGER NOT NULL DEFAULT 0,
-    -- 类型调和（concept 目标被具体类型升格）的回滚快照
+    -- A revert snapshot for type reconciliation, used when a concept target is upgraded
+    -- to a specific type.
     target_type_before    UUID REFERENCES entity_types(id),
-    -- NULL = 自动合并（LLM 裁决高置信）
+    -- NULL means an automatic merge (a high-confidence LLM judgment).
     merged_by             UUID REFERENCES users(id),
     reason                TEXT,
     created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),

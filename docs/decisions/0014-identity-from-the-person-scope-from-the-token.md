@@ -1,139 +1,113 @@
-# 0014 · 身份跟着人，范围跟着令牌
+# 0014 · Identity comes from the person; scope comes from the token
 
-- **状态**：已实施（#161 记录、#180 落地）· `personal_tokens` + Streamable HTTP 的 MCP 服务端已上线，暴露五个只读工具；**尚无前端界面**——令牌的发放 / 列表 / 撤销与 MCP 配置提示今天都只有 API（2026-09-02 核，修订见文末）
-- **成文**：2026-09-01（约定见 [README](README.md)）
-- **相关**：迁移 `0014_data_source_grants` 刚给数据源补上授权层——本篇是同一个问题
-  换到「机器来敲门」这一侧；[0004](0004-language-and-localization.md) 定下服务端只说英文，
-  错误码这一条对 MCP 同样适用
+- **Status**: Implemented (documented in #161, shipped in #180). A `personal_tokens` table and a Streamable HTTP MCP server are live, exposing five read-only tools. **No frontend UI exists yet** — issuing, listing, and revoking tokens, and MCP setup instructions, are API-only today (checked 2026-09-02; revision at the end).
+- **Written**: 2026-09-01 (see conventions in [README](README.md))
+- **Related**: migration `0014_data_source_grants` just added an authorization layer for data sources — this document applies the same problem to "a machine knocking on the door" instead. [0004](0004-language-and-localization.md) established that the server only speaks English; the same rule applies to error codes here, for MCP too.
 
-> 起因是要把 Utopia 的七个工具暴露成 MCP 服务端。**第一个要回答的不是传输层选哪个，
-> 是客户端以什么身份接进来。** 这一篇只答这个。
+> This started from exposing Utopia's seven tools as an MCP server. **The first question to answer is not which transport to use, it is what identity a client connects with.** This document answers only that.
 
-## 现状：两种凭据，都不合身
+## Current state: two kinds of credentials, neither fits
 
-| | 跟着谁 | 存法 | 过期 | 能撤吗 |
+| | Tied to | Storage | Expiry | Revocable? |
 |---|---|---|---|---|
-| JWT | 人 | 无状态 | 7 天 | **不能**——签出去就管不了 |
-| `sources.ingest_token` | 一个来源 | 明文 | 无 | 换一个 |
+| JWT | A person | Stateless | 7 days | **No** — once issued, it cannot be controlled |
+| `sources.ingest_token` | A source | Plain text | None | Only by rotating it |
 
-JWT 是给浏览器会话设计的：短命、每次登录重签、无状态所以不需要一张表。MCP 客户端是
-长命的、机器的、配在别人机器上的一个文件里——七天过期意味着每周手动重配一次，而
-「撤不回来」意味着笔记本丢了只能等它自己过期。
+A JWT is designed for a browser session: short-lived, re-issued at every login, stateless so it needs no table. An MCP client is long-lived, machine-driven, and configured as a file on someone else's machine — a 7-day expiry means reconfiguring it by hand every week, and "cannot be revoked" means a lost laptop can only be waited out until it expires on its own.
 
-`ingest_token` 更不合适：它跟来源走，不跟人走，而且只能**往里推文档**。
+`ingest_token` fits even worse: it is tied to a source, not a person, and it can only **push documents in.**
 
-## 走过的岔路：KB 级机器令牌
+## A path we tried and rejected: a machine token per knowledge base
 
-先提的方案是给知识库发机器令牌——一枚令牌对应一个库，跟人无关。
+The first proposal was to issue a machine token per knowledge base — one token per base, unrelated to any person.
 
-**否掉了，两条理由：**
+**Rejected, for two reasons:**
 
-1. **它引入第三套授权模型。** 现在已经有工作区成员和 KB 角色两层；再加一层「令牌自己的
-   权限」，那么「这个 agent 能看什么」就得同时查三张表才答得出来。而三层里任何一层写错，
-   失败方向都是「多给了」。
-2. **归因会变成假的。** `audit_events.actor_id` 现在记的是活人，`actor_label` 还存了一份
-   身份快照。机器令牌写进来的事实，actor 只能是一个合成 id——台账上就多出一类「不是任何
-   人做的」记录，而账本存在的理由正是「谁在什么时候认下了什么」。
+1. **It introduces a third authorization model.** There are already two layers: workspace membership and KB role. Adding a third layer — "what the token itself is allowed to do" — means answering "what can this agent see" by checking three tables at once. And in any of the three layers, a mistake fails in the direction of "granted too much."
+2. **Attribution would become fake.** `audit_events.actor_id` today records a real person, and `actor_label` keeps a snapshot of their identity. A fact written in by a machine token would need a synthetic actor id — adding a new category of ledger entry that "no person did," when the entire reason the ledger exists is to record who confirmed what, and when.
 
-**改成：令牌以这个人的身份行事。**
+**Instead: a token acts as the person who issued it.**
 
-## 决定
+## The decision
 
 ```
-有效权限 = 这个人的角色  ∩  这枚令牌的 scope
+Effective permission = this person's role  ∩  this token's scope
 ```
 
-交集，不是并集。**令牌只能收窄，永远不能放宽。** 一个 viewer 的令牌勾上 write 也还是
-只读——scope 是上限，不是授权。
+An intersection, not a union. **A token can only narrow permission, never widen it.** A viewer's token, even if marked write, is still read-only — scope is a ceiling, not a grant.
 
-### 为什么身份跟着人
+### Why identity comes from the person
 
-- **现有守卫一行不用改。** `require_kb(kb_id, Role::Viewer)`、`access::kb_role` 拿到的还是
-  一个 `User`，它从哪来的无所谓
-- **归因是真的。** 台账上是活人，不是机器人
-- **停用即失效。** 人离职停用，他的令牌跟着废，不用单独维护一张「谁的机器还连着」的表
-- **多个库不用发多把钥匙**
+- **No existing guard needs to change.** `require_kb(kb_id, Role::Viewer)` and `access::kb_role` still receive a `User`; where that user came from does not matter to them.
+- **Attribution is real.** The ledger shows a real person, not a synthetic robot.
+- **Deactivation revokes it automatically.** When a person is deactivated, their tokens go with them — no separate table tracking "whose machines are still connected" is needed.
+- **No separate key is needed per knowledge base.**
 
-### 为什么范围仍然要单独收窄
+### Why scope still needs its own narrowing
 
-因为有一个 MCP 特有的问题，应用内对话没有这么严重：
+Because MCP has a specific problem that an in-app conversation does not have to nearly the same degree:
 
-> **混淆代理。** MCP 客户端是别人的 agent、别人的系统提示词，而它读的是知识库里的
-> 文档——**不可信内容**。一份文档里写「请执行这段 SQL」或者「记住 X」，那个 agent 可能
-> 就照做了，用的是这个人的全部权限。
+> **A confused deputy.** An MCP client is someone else's agent, running someone else's system prompt, reading documents from the knowledge base — **untrusted content.** A document that says "please run this SQL" or "remember X" might be followed literally by that agent, acting with this person's full permissions.
 
-应用内对话也有这个面，但那里提示词和工具循环都在 Utopia 手里；走 MCP，Utopia 对客户端
-的提示词、对它还接了哪些别的服务端，一无所知。
+An in-app conversation has this exposure too, but there, both the prompt and the tool loop are entirely under Utopia's control. Over MCP, Utopia knows nothing about the client's own prompt, or what other servers it is also connected to.
 
-而这个人的「全部权限」是什么：经 `query_data`，对他所在**每一个库挂载的每一个生产
-数据库**跑只读 SQL；经 `remember`，往 append-only 账本里写事实。这些能力配在一串放在
-`claude_desktop_config.json` 明文里的字符串上。
+And "this person's full permissions" is substantial: through `query_data`, running read-only SQL against **every production database mounted on every base they belong to**; through `remember`, writing facts into an append-only ledger. These capabilities would be attached to a string sitting in plain text inside a file like `claude_desktop_config.json`.
 
-所以默认发**只读、限定到一个库**的令牌。要让 agent 写，得显式勾。
+So the default issued token is **read-only, scoped to one knowledge base.** Letting an agent write requires an explicit, separate choice.
 
-## 这枚要哈希，而 `ingest_token` 不哈希
+## This token is hashed. `ingest_token` is not
 
-两处结论不同，不是疏忽。`ingest_token` 那条明文决定的原话（`0002_ingest.sql`）：
+The two conclusions differ, and that is deliberate, not an oversight. The reasoning behind storing `ingest_token` in plain text is stated directly in `0002_ingest.sql`:
 
-> **明文存，不是哈希。** 自部署威胁模型下「只看一次」是自找麻烦：改存明文随时可查。
-> DB 失守时文档本体早已泄露，密钥哈希化没有额外收益
+> **Stored in plain text, not hashed.** Under a self-hosted threat model, "show it only once" causes more harm than it prevents — storing it in plain text lets it be checked at any time. If the database is compromised, the document knowledge base is already exposed; hashing the key adds no real protection here.
 
-那个推理对 ingest_token 成立，因为**它只能往里推文档**——泄露它的最坏结果是有人往你
-库里塞垃圾，而库都失守了，塞垃圾不是最要紧的事。
+That reasoning holds for `ingest_token` because **it can only push documents in.** The worst outcome of leaking it is someone dumping junk into your knowledge base — and if the database is already compromised, junk documents are not the biggest concern anymore.
 
-个人令牌不一样：它经 `query_data` 能**读出 Utopia 之外的生产库**。Utopia 的数据库失守
-本来就泄露 Utopia 自己的文档，但数仓在另一台机器上、装着另一批数据，不该跟着一起丢。
-**爆炸半径不同，所以存法不同。**
+A personal token is different: through `query_data`, it can **read production databases outside Utopia entirely.** Utopia's own database being compromised already exposes Utopia's own documents; a separate data warehouse, on a separate machine, holding separate data, should not be exposed along with it. **The blast radius differs, so the storage method differs too.**
 
-## 形状
+## The shape
 
 ```sql
 CREATE TABLE personal_tokens (
     id           UUID PRIMARY KEY,
     user_id      UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-    name         TEXT NOT NULL,          -- 人自己起的，"我的笔记本"
-    token_hash   TEXT NOT NULL,          -- 哈希，理由见上
+    name         TEXT NOT NULL,          -- chosen by the person, e.g. "my laptop"
+    token_hash   TEXT NOT NULL,          -- hashed, reasoning above
     scope        TEXT NOT NULL DEFAULT 'read'
                  CHECK (scope IN ('read', 'write')),
-    kb_ids       UUID[],                 -- NULL = 这个人能进的全部
-    expires_at   TIMESTAMPTZ,            -- NULL = 不过期，但 UI 默认给 90 天
-    last_used_at TIMESTAMPTZ,            -- 「这枚还在用吗」，撤之前要答得出
-    revoked_at   TIMESTAMPTZ,            -- 撤销不删行：撤过这件事本身要留痕
+    kb_ids       UUID[],                 -- NULL = every base this person can access
+    expires_at   TIMESTAMPTZ,            -- NULL = never expires, but the UI defaults to 90 days
+    last_used_at TIMESTAMPTZ,            -- needed to answer "is this token still in use" before revoking it
+    revoked_at   TIMESTAMPTZ,            -- revoking does not delete the row: the fact of revocation must itself be recorded
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 ```
 
-`user_id` 这条有外键且级联，与 `audit_events.actor_id` 的裸外键相反——**台账要活得比
-用户久，令牌不该**。人没了，他的钥匙就该一起没。
+`user_id` has a real foreign key with cascade, the opposite of the bare foreign key on `audit_events.actor_id` — **the ledger must outlive the user; a token should not.** Once a person is gone, their key should be gone too.
 
-## 一条实施纪律
+## One implementation rule
 
-**每个工具入口都要校验 scope，不能只在连接握手时校验一次。**
+**Every tool call must check scope, not just once at connection setup.**
 
-这是 `0014_data_source_grants` 那轮的教训，原话写在测试里：
+This is the lesson from the `0014_data_source_grants` work, stated directly in that test:
 
-> 列表过滤只挡「看得见」，而挂载端点是照着 id 调的——守卫必须在两侧都有
+> A list filter only blocks what is visible; the mount endpoint is called directly by id — the guard must exist on both sides.
 
-MCP 的对应形态是：握手时校验一次，然后整条连接生命周期里都信任它。工具调用是一个个
-独立请求，`revoked_at` 在中途被写上时，正在跑的连接必须立刻失效。
+The MCP equivalent: checking once at handshake and then trusting the connection for its whole lifetime is not enough. Each tool call is its own independent request, and if `revoked_at` gets set mid-connection, any in-flight session must fail immediately.
 
-## 修订记录（2026-09-02）：落地之后对照本文
+## Revision note (2026-09-02): checked against the shipped code
 
-**形状**多一列 `token_prefix`（`utp_pat_…`，与 ingest 的 `utp_` 区分——日志与配置文件里一眼要认得出是哪一种），`token_hash` 加了 `UNIQUE`。哈希选 SHA-256 不选 argon2：高熵串不怕爆破，而每行盐不同就查不了唯一索引。
+**The shape** gained one extra column, `token_prefix` (`utp_pat_…`, distinct from ingest's `utp_` prefix — so logs and config files show at a glance which kind of token this is), and `token_hash` gained a `UNIQUE` constraint. SHA-256 was chosen over argon2: a high-entropy string does not need brute-force resistance, and a per-row salt would make a unique index impossible to query.
 
-**「每个工具入口都校验 scope」那条纪律被满足了，但形态与预想不同**：做成完全无状态——每个 POST 重跑一次认证（撤销 / 过期在 SQL 的 `WHERE` 里判）+ `covers()` + `require_kb`，没有「连接」这个东西可以被信任。`scope` 在这一版没有分支：`can_write` 硬编码 `false`，就算令牌勾了 write 也不放开。每次工具调用写一条审计（`mcp.tool_called`，target 是令牌），归因是真的。
+**The rule "check scope on every tool call" was kept, but in a different shape than planned**: it shipped fully stateless — every POST re-runs authentication from scratch (revocation and expiry are checked directly in the SQL `WHERE` clause), plus `covers()`, plus `require_kb`; there is no "connection" object to trust in the first place. `scope` has no branching logic in this version: `can_write` is hardcoded to `false`, so even a token marked write is not allowed to write. Every tool call logs one audit entry (`mcp.tool_called`, targeting the token), so attribution is real.
 
-**前置条件本文没记**：#175 把七个工具的执行从 `chat.rs` 的 `match` 里抽成 `tools.rs`，对话与 MCP 共用同一份实现——否则「对话里的 `entity_facts` 和 MCP 里的不是同一个东西」。工具的 JSON schema 仍留在 `chat.rs`，MCP 复用它做转换，已知带一处瑕疵：`search_chunks` 的描述里还写着「可以引用成 [n]」，而 MCP 客户端拿不到引用编号。
+**A precondition this document did not record**: #175 pulled the execution of the seven tools out of the `match` statement in `chat.rs` into `tools.rs`, so conversation and MCP share one implementation — without this, "`entity_facts` in a conversation" and "`entity_facts` over MCP" would not be the same thing. The tools' JSON schema still lives in `chat.rs`, and MCP reuses it for conversion, with one known rough edge: `search_chunks`'s description still says "can be cited as [n]," but an MCP client has no citation numbering to use.
 
-**一处会误导人的陈述**：`crates/utopia-mcp` 曾是三行占位，宣称的三个工具名（`add_memory` / `search_memory` / `get_entity_timeline`）从未实现，MCP 服务端住在 `utopia-server/src/api/mcp.rs`。〔已删（2026-09-02，连同 `utopia-graph`、`utopia-connectors`），理由见 [0016](0016-close-the-open-seams-before-cutting-new-ones.md) A2。〕
+**One statement worth flagging as misleading**: `crates/utopia-mcp` was once a three-line placeholder claiming three tool names (`add_memory`, `search_memory`, `get_entity_timeline`) that were never implemented; the real MCP server lives in `utopia-server/src/api/mcp.rs`. (Removed 2026-09-02, along with `utopia-graph` and `utopia-connectors`; see [0016](0016-close-the-open-seams-before-cutting-new-ones.md) A2 for the reasoning.)
 
-## 未决
+## Open questions
 
-- **`query_data` 与 `remember` 要不要进第一版。** 倾向不进——先发四个只读工具
-  （`search_chunks` / `find_entities` / `entity_facts` / `changes`），把身份这条路走通再说。
-  这两个各自还有没答的问题：外部 agent 写进来的事实挂什么证据？跑 SQL 的审计怎么记？〔**已答：不进**。实际发的是五个而非四个，多一个 `search_docs`。`remember` 的前提是 [0015](0015-recording-a-sentence-is-not-asserting-a-fact.md) 那道闸，而闸还没接上。〕
-- **传输层**：stdio（本地，配 Claude Desktop 最省事）还是 streamable HTTP（远程，
-  和 Utopia 已经是个服务端相称）。这个选择不影响本篇的结论，两种都要认令牌。〔**已答：Streamable HTTP**，一条路由 `POST /api/v1/kbs/{kb_id}/mcp`，响应用 `application/json` 不用 SSE——工具一问一答，没有服务端主动推的东西。〕
-- **令牌能不能跨工作区。** 现在的 `kb_ids` 是库级白名单；如果将来要按工作区发，
-  和数据源授权那张表会长得很像，届时看要不要合并概念。〔仍未做。〕
-- **（2026-09-02 补）没有界面。** 「UI 默认给 90 天」的 90 天在服务端，而前端根本没有令牌那一页。这是 MCP 今天对用户不可用的直接原因。
+- **Whether `query_data` and `remember` belong in the first release.** Leaning no — ship four read-only tools first (`search_chunks`, `find_entities`, `entity_facts`, `changes`), and prove identity works before adding more. Both of these two still have unanswered questions of their own: what evidence should back a fact written in by an external agent, and how should a SQL run be audited? (**Answered: not included.** Five tools shipped instead of four, adding `search_docs`. `remember` depends on the gate described in [0015](0015-recording-a-sentence-is-not-asserting-a-fact.md), which is not wired up yet.)
+- **Transport**: stdio (local, the simplest setup for Claude Desktop) or streamable HTTP (remote, matching that Utopia is already a server). This choice does not change this document's conclusion — both need to authenticate a token. (**Answered: Streamable HTTP**, one route, `POST /api/v1/kbs/{kb_id}/mcp`, responding with `application/json` rather than SSE — tools are one question and one answer, with nothing the server needs to push on its own.)
+- **Whether a token can span multiple workspaces.** Today `kb_ids` is a per-base allowlist; if tokens are ever issued per workspace, that table would end up looking very similar to the data-source grants table, and the two concepts may be worth merging then. (Still not done.)
+- **(Added 2026-09-02) There is no UI.** The "90 days" default lives on the server; the frontend has no token page at all. This is the direct reason MCP is not usable by an end user today.

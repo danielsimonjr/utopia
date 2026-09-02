@@ -9,13 +9,16 @@ import { toast } from "../toast";
 import { SearchSelect } from "../ui";
 import { Members } from "./Members";
 
-/** 一个源授权给了哪些工作区（0014）。
+/** The workspaces granted access to one data source (ADR 0014).
  *
- * **授权与挂载是两层**：这里说「这个源可以给谁用」，KB 管理员再在授权过的
- * 集合里挑挂不挂。从前没有这一层——可挂载列表返回全部署每一个源，于是任何
- * 库的管理员都能把任意生产库挂进自己库。
+ * **Granting access and mounting are two separate layers.** This layer
+ * states which workspaces can use a source. A KB admin then picks, from
+ * that granted set, whether to mount it. This layer did not exist
+ * before: the mountable list used to return every source in the whole
+ * deployment, so any KB admin could mount any production database into their own KB.
  *
- * 两层都是多对多：一个源可授权给多个工作区，一个工作区可拿到多个源。 */
+ * Both layers are many-to-many: one source can grant access to several
+ * workspaces, and one workspace can gain access to several sources. */
 function SourceGrants({ sourceId }: { sourceId: string }) {
   const queryClient = useQueryClient();
   const [picked, setPicked] = useState("");
@@ -43,8 +46,9 @@ function SourceGrants({ sourceId }: { sourceId: string }) {
   });
   const revoke = useMutation({
     mutationFn: (wsId: string) => api.revokeDataSource(sourceId, wsId),
-    // 卸了几个要说出来：收回授权会顺带断掉正在用的挂载，
-    // 悄悄断比断本身更糟
+    // The unmount count must show. Revoking access also unmounts any KB
+    // currently using the source, and an unannounced disconnect is worse
+    // than the disconnect itself.
     onSuccess: (r) => {
       setNotice(S.settings.datasources.grantRevoked(r.unmounted));
       invalidate();
@@ -108,7 +112,7 @@ function SourceGrants({ sourceId }: { sourceId: string }) {
   );
 }
 
-/** 部署级配置：注册开关 + worker 并发。 */
+/** Deployment-level settings: the self-registration switch and worker concurrency. */
 function DeploymentAdmin() {
   const queryClient = useQueryClient();
   const dep = useQuery({
@@ -117,7 +121,7 @@ function DeploymentAdmin() {
   });
   const [workers, setWorkers] = useState<number | null>(null);
   const shown = workers ?? dep.data?.worker_concurrency ?? 32;
-  // 按模型的并发：缺省值 + 每个在用模型的覆盖
+  // Per-model concurrency: a default value, plus an override for each model in use.
   const [modelDefault, setModelDefault] = useState<number | null>(null);
   const shownDefault =
     modelDefault ?? dep.data?.default_model_concurrency ?? 10;
@@ -168,8 +172,10 @@ function DeploymentAdmin() {
         </span>
       </label>
 
-      {/* 新建库的本体语言。**不是界面语言**——界面语言是每个人自己在账户菜单里选的，
-          根本不经过后端（docs/decisions/0004）。说明里必须把这句讲出来 */}
+      {/* The ontology language for a new KB. **This is not the UI
+          language.** Each user picks the UI language in their own account
+          menu, and that choice never reaches the server (see ADR 0004).
+          The help text must state this distinction clearly. */}
       <div className="flex items-start justify-between gap-4 border-t border-white/10 pt-4">
         <div className="min-w-0">
           <span className="block text-sm text-neutral-200">
@@ -231,8 +237,10 @@ function DeploymentAdmin() {
           </button>
         </div>
       </div>
-      {/* 按模型的并发才是真正的节流：约束来自供应商的速率限制，而那是按模型算的。
-          上面那个 worker 并发只是外层兜底，防任务无限堆积 */}
+      {/* Per-model concurrency is the setting that actually throttles
+          requests: the real constraint is the provider's rate limit,
+          which applies per model. The worker concurrency setting above is
+          only an outer safety limit that stops jobs from piling up without bound. */}
       <div className="border-t border-white/10 pt-4">
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
@@ -359,7 +367,8 @@ function DeploymentAdmin() {
   );
 }
 
-/** 知识库管理（部署层）：全部库总览 + 新建（建库是管理动作，切换器只切换）。 */
+/** KB administration (deployment level): an overview of all KBs, plus
+ *  creating a new one. Creating a KB is an admin action; the switcher only switches between them. */
 function KbsAdmin() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -435,7 +444,7 @@ function KbsAdmin() {
               queryKey: ["myKbs", workspace.id],
             });
             queryClient.invalidateQueries({ queryKey: ["kbs", workspace.id] });
-            // 建完直达库设置：下一步几乎总是邀人/配置
+            // After creation, this goes straight to KB settings, because the next step is almost always inviting people or configuring the KB.
             if (id) {
               setKb(id);
               navigate({ to: "/kb/$kbId/settings", params: { kbId: id } });
@@ -447,7 +456,8 @@ function KbsAdmin() {
   );
 }
 
-/** 新建知识库弹窗（管理员）：缺省 restricted，不污染全员切换器。 */
+/** The "create a new KB" dialog (admin only). It defaults to restricted
+ *  visibility, so it does not clutter the switcher for every user. */
 function NewKbModal({
   workspaceId,
   onDone,
@@ -458,9 +468,12 @@ function NewKbModal({
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
   const [restricted, setRestricted] = useState(true);
-  // schema.org 默认勾选，可反选（0009）。删掉内置类之后不选任何包的库是真的空，
-  // 而空库仍然能用——但绝大多数人要的是一个已经能认出人、组织、产品的起点。
-  // 一秒装完（0008 的批量插入），所以默认装得起
+  // The schema.org pack is checked by default, and the user can uncheck
+  // it (ADR 0009). After removing the built-in types, a KB with no pack
+  // selected is truly empty, and an empty KB still works. Most users want
+  // a starting point that already recognizes people, organizations, and
+  // products. This installs in about one second (the batch insert from
+  // ADR 0008), so it is affordable as the default.
   const [packs, setPacks] = useState<string[]>(["schema-org"]);
 
   const available = useQuery({
@@ -468,8 +481,10 @@ function NewKbModal({
     queryFn: api.ontologyPacks,
   });
 
-  // 勾选顺序即安装顺序：第一个包的类会认领同名的种子类，
-  // 后面的撞名才查得到对齐表。所以取消再勾会排到末尾——这是对的
+  // The check order is the install order: the first pack's types claim
+  // any same-named seed types, and a later pack with a name collision
+  // looks up the alignment table. So unchecking and rechecking a pack
+  // moves it to the end of the order; that is the correct behavior.
   const toggle = (id: string) =>
     setPacks((prev) =>
       prev.includes(id) ? prev.filter((p) => p !== id) : [...prev, id],
@@ -538,8 +553,10 @@ function NewKbModal({
               return (
                 <label
                   key={p.id}
-                  // 选中态靠边框与底色，勾选框藏起来：五个并排时
-                  // 一排勾选框比内容本身还抢眼
+                  // The selected state uses a border and a background
+                  // color; the checkbox itself stays hidden. With five
+                  // options side by side, a row of visible checkboxes
+                  // would draw more attention than the content itself.
                   className={
                     "cursor-pointer rounded-lg border px-2.5 py-2 transition-colors " +
                     (on
@@ -597,7 +614,8 @@ function NewKbModal({
   );
 }
 
-/** 系统层数据源注册（问数）：凭据只进不出，列表只显示 host:port/db 摘要。 */
+/** System-level data source registration (for Ask). Credentials are
+ *  write-only; the list shows only a host:port/database summary. */
 function DataSourcesAdmin() {
   const queryClient = useQueryClient();
   const list = useQuery({

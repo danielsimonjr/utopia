@@ -1,6 +1,8 @@
-/* 法务页（/privacy、/terms）：登录页页脚可达的公共页面。
-   自部署语境：运营方是部署它的组织，这里的文本是随软件附带的缺省政策，
-   口径务求诚实（存了什么、什么情况下数据会离开服务器、删除的真实语义）。 */
+/* Legal pages (/privacy, /terms): public pages linked from the login page footer.
+   This is a self-hosted context: the operator is the organization that
+   deploys the software, and this text is the default policy that ships
+   with it. State facts honestly: what data is stored, when data leaves
+   the server, and what deletion actually does. */
 import { Link } from "@tanstack/react-router";
 import { S } from "../i18n";
 

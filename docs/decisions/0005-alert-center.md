@@ -1,256 +1,193 @@
-# 0005 · 告警中心
+# 0005 · Alert center
 
-- **状态**：已建成 · 五种告警在线（`source.sync_failed`、`llm.unreachable`、`llm.rate_limited` #160、`llm.out_of_credit` #182、`data_source.schema_sync_failed`），面板带搜索与按组分页；
-  三个决定里第 1、2 条在实现过程中被推翻，就地留痕见下；`document.no_text_layer` 仍未接（2026-09-02 核）
-- **成文**：2026-08-29
-- **相关**：与 Review 队列（0001 P4）职责相邻，本文划边界
+- **Status**: Shipped. Five alert types are live (`source.sync_failed`, `llm.unreachable`, `llm.rate_limited` #160, `llm.out_of_credit` #182, `data_source.schema_sync_failed`), with a panel supporting search and grouped pagination. Decisions 1 and 2 below were each overturned during implementation; the revision stays in place. `document.no_text_layer` is still not wired up (checked 2026-09-02).
+- **Written**: 2026-08-29
+- **Related**: adjacent in responsibility to the Review queue (0001 P4); this document draws the boundary between them.
 
 ---
 
-## 为什么
+## Why
 
-失败状态目前散在六处，各有各的字段，没有一个地方能一眼看全：
+Failure states are scattered across six places today, each with its own fields, with no single place to see them all:
 
-| 位置 | 记的是 |
+| Location | Records |
 |---|---|
-| `jobs.status='failed'` + `jobs.last_error` | 任务失败 —— **没有任何界面**〔现在：任务**最终**失败（`attempts >= max_attempts`）且错误可分类时，经 `observe_job_failure` 变成告警；重试期间不报，重试本就是为了不惊动人〕 |
-| `documents.status='failed'` | 摄入失败 |
-| `documents.graph_status='failed'` | 抽取失败 |
-| `sources.last_sync_status='failed'` | 源的最近一次同步失败 |
-| `source_sync_runs.status='failed'` | 单次同步失败 |
-| 日志 | 其余一切 |
+| `jobs.status='failed'` plus `jobs.last_error` | A job failed — **no UI shows this at all.** (Now: a job that **finally** fails, meaning `attempts >= max_attempts`, and whose error can be classified, becomes an alert through `observe_job_failure`. Nothing is reported during retries, since retries exist precisely to avoid bothering a person.) |
+| `documents.status='failed'` | Ingestion failed |
+| `documents.graph_status='failed'` | Extraction failed |
+| `sources.last_sync_status='failed'` | A source's most recent sync failed |
+| `source_sync_runs.status='failed'` | One sync run failed |
+| Logs | Everything else |
 
-而且这个问题**已经被局部修过一次**。当时的迁移 `0021_graph_error.sql`（#130/#131 折叠后落在 `0002_ingest.sql` 的 `graph_error` 列）的第一句是：
+This problem **was already partly fixed once.** Migration `0021_graph_error.sql` (later folded into `0002_ingest.sql`'s `graph_error` column after #130/#131) opens with:
 
-> 抽取失败的原因此前只进日志与 `jobs.last_error`，文档上什么都不留，界面无从显示。
+> Extraction failures used to go only into logs and `jobs.last_error`; the document itself kept no trace, so the UI had nothing to show.
 
-那次的修法是往 `documents` 上加错误字段。**这是打补丁**：每出现一类新的失败，就往对应的表上加一列。推演层、执行层、OCR 端点、湖仓连接都还没进来，每一个都会带来自己的失败面。照这个路子走下去，会有十几个错误字段散在十几张表上，而用户仍然没有"现在系统哪里不对"的入口。
+That fix added an error field to `documents`. **This is a patch.** Each new kind of failure gets its own column on its own table. The reasoning layer, the execution layer, an OCR endpoint, and lakehouse connections have not shipped yet, and each will bring its own kind of failure. Following this pattern leads to a dozen error columns scattered across a dozen tables, with the user still having no single place to ask "what is wrong right now."
 
-真正伤人的不是失败本身，是**失败无声**。拖 100 份 PDF 进去、其中 12 份是扫描件，界面上 100 份全绿 —— 用户以为都进去了，直到某天问一个问题、答案里没有那份合同，而他不会想到去怀疑摄入环节。
+The real damage is not the failure itself, it is a **silent** failure. Drag in 100 PDFs, 12 of them scanned images, and the UI shows all 100 as green — the user believes everything landed, until the day they ask a question and the answer is missing that one contract, with no reason to suspect ingestion at all.
 
 ---
 
-## 边界：与 Review 队列的分工
+## The boundary with the Review queue
 
-两者都是"待处理的列表"，不划清会互相蚕食。
+Both look like "a list of pending items." Without a clear line, they compete for the same attention.
 
-| | Review 队列 | 告警中心 |
+| | Review queue | Alert center |
 |---|---|---|
-| 性质 | 需要人**做决定** | 需要人**知道** |
-| 例子 | 这两个实体合不合并、这条低置信事实要不要收 | 这份文档没进去、源连不上、端点挂了 |
-| 不处理的后果 | 知识停在半路 | **你以为进去了，其实没有** |
-| 谁产生 | 抽取与消解在拿不准时主动入队 | 任何执行路径在失败时上报 |
+| Nature | A person must **make a decision** | A person must **be told** |
+| Example | Should these two entities merge? Should this low-confidence fact be kept? | This document did not ingest. This source cannot connect. This endpoint is down. |
+| Cost of ignoring it | Knowledge stays half-formed | **You believe it landed, and it did not** |
+| Who raises it | Extraction and resolution, when uncertain | Any execution path, on failure |
 
-一句话：**Review 管知识的对错，告警管系统的死活。**
-
----
-
-## 三个决定
-
-### 1. 聚合属于视图，不属于表
-
-> **修订记录**：这一条原本写的是"同一类未解决的只有一条"，让 `(kb_id, kind)`
-> 在表里唯一，多次故障并成一行、往 `subject_ids` 数组里追加。
-> **前半句是对的，后半句是错的**，而且它是第 2 条那套状态机的根源。
-
-拖 100 份 PDF、12 份是扫描件，界面上该读到**一条**「12 份文档没有文本层」，不是 12 条。
-没有聚合的告警中心两周后就没人看了 —— 这不是优化，是能不能用的前提。这句仍然成立。
-
-**但聚合必须是读出来的，不能存下来。** 存在表里的聚合是**活的**，活的东西要维护：
-东西好了得从数组里摘掉，不摘就撒谎。而"什么时候算好了"正是下面第 2 条那个坑。
-实现时先按存储聚合写了一版，三个 bug 全出自同一个根源 —— 那一行在自愈过程中被
-一路掏空，于是它既说不出自己曾经是什么事（`subject_ids` 与 `detail` 都空了），
-又会写出"0 个来源同步失败"这种标题。
-
-现在的做法：**存储一次故障一行，读的时候把连着的同 `(kb, kind)` 折成一组。**
-折叠在 SQL 里做（两个 `row_number()` 相减，gaps and islands），因为分页得按组分 ——
-放前端折的话一段连续故障跨了页边界就会断成两组，点一下也只标到边界为止。
-计数是算出来的，永远不会过期。
-
-只折**相邻**的：中间隔了别的故障就说明那是另一段时间的事，不该并进来。
-
-### 2. 「修好了没有」不是告警中心该回答的问题
-
-> **修订记录**：这一条原本是"自愈优先于人工关闭"，理由是"做不到自愈的告警，
-> 用户很快学会无视它"。**那个担心是真的，但这个解法是错的**，而且错得很贵 ——
-> 整节推翻，留在这里是因为这个主意足够诱人，不留痕就会被再提一次。
-
-原方案：`resolved_at` 由产生方清空，配好 OCR 端点、那 12 份重新处理成功，告警自己消失。
-
-**它要求每一种新告警都自己实现一遍"怎么算修好了"。** 第一刀两种告警就要了两套机制：
-`source.sync_failed` 有天然的成功信号（`finish_sync` 成功失败走同一个出口，白捡的）；
-`llm.unreachable` 没有，只好为它单独造一个后台探针 —— 每分钟敲一次端点，
-而且得先判断"这条告警还亮着吗"才敢发请求，否则健康的部署也在空转。
-第三种告警要造第三套。**而漏写清除是编译期看不出来的**，症状是告警永远亮着 ——
-恰好就是这个功能最怕的那件事。
-
-更根本的一层：**那不是告警中心的职责。** 现在还坏不坏，来源页面上写着、文档状态里写着。
-告警的职责是让人去看一眼，不是当实时看板。
-
-那"用户学会无视"怎么办？靠**每次故障发一条新的**：修好了就不再有新故障，
-读过的那些沉下去、角标自己灭；两个月后再坏，那是一条新的告警，角标重新亮。
-不需要成功信号，不需要探针，不需要任何时间常数。
-
-代价只有一个，也确实要付：**行数**。一个坏掉的来源按小时同步，一天写 24 行。
-所以有保留期（30 天，`alerting::RETAIN_DAYS`）—— 不清理这张表会长成第二个日志文件。
-
-> 也考虑过按 `(kb, kind, subject)` 去重、重复发生只推时间戳：行数有界、不用保留期。
-> **否掉了**，因为那样"复发"和"一直没好"在数据上无法区分，除非引入时钟或者成功信号；
-> 于是只能二选一 —— 读过就永久已读（两个月后复发静默，**漏报**），
-> 或者时间戳一动就重新变未读（已知故障每小时点亮，**噪音**）。漏报比行数贵得多。
-
-### 3. 读是各人的（这一条完好无损）
-
-**这条推翻了一个更省事的方案，理由值得记下来。**
-
-被否决的方案：一条告警被任何一个管理员点开，就对所有人标记已读。看起来省了重复劳动。
-
-失效方式：
-
-> 知识库有三个管理员。A 早上顺手点开看了一眼，没处理。这条告警从 B、C 的未读列表里**永远消失**了 —— 他们不知道曾经发生过这件事，而 A 想着"等会儿再说"。
-
-这是共享已读的经典失效：**所有人都以为别人在处理**，而且发生之后没有任何痕迹能让人发现漏了。
-
-根子在于把两件事合并了：**「已读」是我看没看过，「已解决」是事情完没完**。一个人读过不代表事情解决。
-
-> **修订记录**：原文接着写"而事情解决了，才是所有人都该从列表里移除它的时刻"，
-> 并把"告警消失 = `resolved_at` 落下，对所有人同时消失"列成与已读并列的一半。
-> **那半边随第 2 条一起没了** —— 没有"已解决"，告警也不会消失，
-> 它只是随时间沉下去、到期被清理。这一条真正立得住的部分是**已读逐人**，
-> 而那部分一个字没改。
-
-所以：**未读 = 我可见的告警里我没点过的** —— 每人独立，一张两列小表。
-换来的是**没有人能替别人把一件事读掉**。GitHub 通知、Slack 未读都这么做，不是巧合。
+In one line: **Review is about right and wrong in the knowledge. Alerts are about the system being alive or not.**
 
 ---
 
-## 可见性
+## Three decisions
 
-`kb_id` 可空，两种语义：
+### 1. Grouping belongs in the view layer, not in the table
+
+> **Revision note**: this decision first read "only one open row per alert kind," making `(kb_id, kind)` unique in the table, folding repeated failures into one row and appending to a `subject_ids` array.
+> **The first half was right. The second half was wrong**, and it is the root cause of the state machine problem in decision 2.
+
+Drag in 100 PDFs, 12 scanned, and the UI should read **one** line: "12 documents have no text layer" — not 12 separate lines. An alert center with no grouping stops being read within two weeks; this is not a nice-to-have, it decides whether the feature works at all. That much still holds.
+
+**But grouping must be computed on read, never stored.** A grouping stored in a table is **alive**, and a live thing needs upkeep: once something is fixed it must be removed from the array, and forgetting to remove it is a lie. And "when is something fixed" is exactly the trap in decision 2 below. The first implementation stored the grouping, and all three bugs it produced traced back to the same root: the row got emptied out piece by piece during self-healing, until it could no longer say what it had originally been about (`subject_ids` and `detail` both empty), while still generating a title like "0 sources failed to sync."
+
+The current approach: **store one row per failure; fold adjacent rows sharing the same `(kb, kind)` into one group at read time.** Folding happens in SQL (a gaps-and-islands pattern, subtracting two `row_number()` calls), because pagination must work by group — folding on the frontend would split one continuous run of failures across a page boundary into two groups, and clicking one would only mark up to the boundary. The count is always computed fresh and can never go stale.
+
+Only **adjacent** rows fold together: a gap in between means it belongs to a different span of time and should not merge in.
+
+### 2. "Is it fixed yet" is not a question the alert center should answer
+
+> **Revision note**: this decision first read "self-healing should take priority over manual dismissal," reasoning that "an alert that never resolves itself trains users to ignore it fast." **That concern was real, but this fix was wrong**, and wrong in an expensive way — the whole section is overturned, and it stays here because the idea is tempting enough that someone will propose it again if it is not recorded.
+
+Original plan: `resolved_at` would be cleared by whatever produced the alert. Once the OCR endpoint was configured and the 12 documents reprocessed successfully, the alert would disappear on its own.
+
+**It requires every new alert type to implement its own answer to "how do we know this is fixed."** The very first two alert types already needed two different mechanisms: `source.sync_failed` has a natural success signal (`finish_sync` uses the same exit point for success and failure, essentially free); `llm.unreachable` has none, so it would need a dedicated background probe — hitting the endpoint every minute, and first checking "is this alert even still lit" before sending a request, or a healthy deployment would spin uselessly. A third alert type would need a third mechanism. **A missing clear-condition is invisible at compile time**, and its symptom is an alert that stays lit forever — exactly the failure this feature exists to prevent.
+
+A deeper problem: **this is not the alert center's job.** Whether something is broken right now is already shown on the source's page and in the document's status. The alert's job is to make someone look, not to serve as a live dashboard.
+
+So what about users learning to ignore it? Solve it by **writing a new row per failure**: once something is fixed, no new failures appear, the old ones sink out of view as they are read, and the badge clears on its own. If it breaks again two months later, that is a new alert, and the badge lights up again. No success signal, no probe, and no time constant needed anywhere.
+
+There is exactly one cost, and it is real: **row count.** A source syncing hourly while broken writes 24 rows a day. So rows expire after a retention window (30 days, `alerting::RETAIN_DAYS`) — without cleanup, this table would grow into a second log file.
+
+> We also considered de-duplicating by `(kb, kind, subject)` and just bumping a timestamp on repeat: bounded row count, no retention window needed.
+> **Rejected**, because it makes "this recurred" and "this never got fixed" indistinguishable in the data, short of adding a clock or a success signal — forcing a choice between two bad options: read-once-means-read-forever (silent on recurrence two months later — **a missed report**), or any timestamp bump reopens the alert as unread (an hourly-failing known issue relights constantly — **noise**). A missed report costs far more than extra rows.
+
+### 3. Read state is per person (this one needed no changes)
+
+**This decision overturned a simpler-looking alternative, and the reasoning is worth keeping.**
+
+Rejected alternative: any admin opening an alert marks it read for everyone. It looks like it avoids duplicate work.
+
+How it fails:
+
+> A knowledge base has three admins. A opens an alert in passing in the morning and does not act on it. The alert **disappears permanently** from B's and C's unread lists — they never learn it happened, while A was thinking "I'll deal with it later."
+
+This is the classic failure of shared read state: **everyone assumes someone else is handling it**, and afterward, nothing shows that it was missed.
+
+The root cause is conflating two different things: **"read" is whether I personally saw it; "resolved" is whether the underlying problem is over.** One person reading it does not mean the problem is solved.
+
+> **Revision note**: the original text continued, "and once the problem is resolved, that is the moment everyone should see it drop from their list," listing "the alert disappears when `resolved_at` is set, for everyone at once" as the other half of read state alongside per-person read status.
+> **That half is gone**, along with decision 2 — there is no "resolved" state, and an alert never disappears on its own; it only sinks with time and gets cleared on expiry. The part of this decision that truly holds is **per-person read state**, and that part is unchanged.
+
+So: **unread = an alert visible to me that I have not clicked** — tracked independently per person, in a small two-column table. What this buys is **no one can mark something read on someone else's behalf.** GitHub notifications and Slack unread counts work the same way, and that is not a coincidence.
+
+---
+
+## Visibility
+
+`kb_id` is nullable, with two meanings:
 
 ```
-kb_id IS NULL   系统级：LLM 端点不可达（今天实际是三条 LLM 告警：不可达 / 限流 / 欠费）
-                → 仅 users.is_admin
+kb_id IS NULL   System-level: the LLM endpoint is unreachable
+                (today, three LLM alerts: unreachable / rate-limited / out of credit)
+                → visible only to users.is_admin
 
-kb_id 有值      知识库级：解析失败、抽取失败、源同步失败
-                → 该库中角色 ≥ min_role 的人
+kb_id set       Knowledge-base level: a parse failure, an extraction failure, a source sync failure
+                → visible to anyone with role >= min_role in that base
 ```
 
-**不新写权限逻辑**：`access::kb_role()` 第一句就是 `if user.is_admin { return Ok(Some(Role::Owner)) }`，告警的可见性判定直接复用它，和 KB 路由走同一条鉴权链。系统管理员因此对知识库级告警也全通。
+**No new permission logic needed**: `access::kb_role()` already opens with `if user.is_admin { return Ok(Some(Role::Owner)) }`, so alert visibility reuses it directly, through the same authorization chain as KB routes. A system admin therefore also sees every knowledge-base-level alert.
 
-> **修订记录（2026-09-02）**：结论（admin 全通、按 `min_role` 比大小）成立，「不新写」没做到。
-> 列表要一条 SQL 里按人过滤，于是走的是 `access::visible_kb_roles()` 加 `alerts.rs` 里一段 `VISIBLE` CASE
-> 加一个 `rank()`——代码自己承认「跟 `Role` 的 `PartialOrd` 同序，也跟 `VISIBLE` 里那个 CASE 同序，三处必须一致」。
-> 记在这里是因为这正是本仓库最怕的那种隐形规则：改角色顺序时得记得改三处。
+> **Revision note (2026-09-02)**: the conclusion holds (an admin sees everything; visibility compares against `min_role`), but "no new logic" did not hold in practice.
+> Listing alerts needs a per-person filter inside one SQL query, so it ended up using `access::visible_kb_roles()`, plus a `VISIBLE` CASE expression in `alerts.rs`, plus a `rank()` call — the code comment admits this outright: "must stay in the same order as `Role`'s `PartialOrd`, and the same order as the `VISIBLE` CASE; all three must agree." Recorded here because this is exactly the kind of hidden rule this codebase tries hardest to avoid: reordering roles means remembering to update three places.
 
-`min_role` 存在 alert 上而不是按 kind 硬编码，因为同一类告警在不同场景下该找的人不同：
+`min_role` is stored on each alert instead of hardcoded per kind, because the same alert kind needs a different audience depending on the case:
 
-- **配置类**（端点、权限、配额）→ admin
-- **内容类**（解析失败、抽取失败、源同步）→ **editor 及以上**
+- **Configuration issues** (an endpoint, permissions, a quota) → admin
+- **Content issues** (a parse failure, an extraction failure, a source sync failure) → **editor and above**
 
-内容类不能只给 admin：拿扫描件举例，admin 需要知道"该配 OCR 了"，但**上传那 12 份文件的人**更需要知道"你传的东西没进去"。只给 admin 的话，真正被影响的人反而看不见。
+Content issues cannot go to admins only. Take a scanned document: an admin needs to know "OCR should be configured," but **the person who uploaded those 12 files** needs even more to know "what you uploaded did not go in." Restricting this to admins only would hide it from exactly the people most affected.
 
 ---
 
-## 数据模型
+## Data model
 
-> **修订记录**：这一节原本是一份草案，含 `subject_ids UUID[]`、`resolved_at`、
-> 以及一个 `WHERE resolved_at IS NULL` 的部分唯一索引。随上面前两条决定一起作废。
-> **不在这里重抄一份 schema** —— 一份和迁移不一致的草案比没有草案更坏。
+> **Revision note**: this section was originally a draft including `subject_ids UUID[]`, `resolved_at`, and a partial unique index on `WHERE resolved_at IS NULL`. It became obsolete along with decisions 1 and 2 above.
+> **We do not restate a schema here** — a draft schema that no longer matches the migrations is worse than no draft at all.
 
-真实定义见 [`migrations/0009_alerts.sql`](../../migrations/0009_alerts.sql)。形状是：
+See [`migrations/0009_alerts.sql`](../../migrations/0009_alerts.sql) for the real definition. In shape:
 
-- `alerts` 一次故障一行，写完不再改。`subject_id` 是**单列**不是数组 ——
-  一行只讲一个对象，`detail` 里存一份当时的名字，所以对象被删了这条告警仍然显示得出来。
-- `alert_reads` 两列，逐人。
-- 没有唯一索引，没有 `resolved_at`，没有状态机。
+- `alerts` has one row per failure, written once and never edited afterward. `subject_id` is a **single column, not an array** — one row describes one object, with `detail` storing a snapshot of its name at the time, so the alert still displays correctly even after that object is deleted.
+- `alert_reads` has two columns, tracked per person.
+- No unique index, no `resolved_at`, no state machine.
 
-有一个坑草案里记对了，值得留着：**`kb_id IS NULL` 的那些行**。当初打算用
-`WHERE resolved_at IS NULL` 的部分唯一索引做聚合，而 NULL 不参与唯一性判定，
-系统级告警会每次上报插新行 —— 聚合对最需要它的那一类静默失效。
-现在没有唯一索引了所以这个坑不存在，但**同类问题还在别处**：
-`mark_group_read` 里比 `kb_id` 用的是 `IS NOT DISTINCT FROM` 而不是 `=`，
-就是同一件事。
+One trap the draft got right and is worth keeping: **rows where `kb_id IS NULL`.** The original plan used a partial unique index on `WHERE resolved_at IS NULL` for grouping, but NULL is excluded from uniqueness checks, so every system-level alert would have inserted a new row on every report — grouping would silently fail for exactly the category that needed it most. That trap no longer exists, since there is no unique index anymore, but **the same class of bug shows up elsewhere**: `mark_group_read` compares `kb_id` with `IS NOT DISTINCT FROM` rather than `=`, guarding against the same NULL behavior.
 
-**推送**复用现有的 `AppEvent` broadcast（加了一个 `alert` kind）。
-但 SSE 路由是**按库**的（`/kbs/{id}/events`），而角标跨库、系统级告警根本没有库，
-所以另开了一条全局流 `/alerts/events`。那条流**不带数据也不判权限**：
-收到的人一律回头重取，谁能看见什么由列表查询判且只判一次 ——
-代价是没权限的人也被叫醒一次，换来的是推送这条路上一行权限逻辑都没有。
+**Push notifications** reuse the existing `AppEvent` broadcast (with a new `alert` kind). But SSE routing is **per knowledge base** (`/kbs/{id}/events`), while the badge spans every base and a system-level alert has no base at all — so a separate global stream, `/alerts/events`, was added. That stream **carries no data and checks no permissions**: anyone who receives an event simply re-fetches, and the list query is the single place that decides who can see what. The cost is that a user with no access is also woken up once; the benefit is that the push path carries zero permission logic.
 
 ---
 
-## 第一刀的范围
+## Scope of the first cut
 
-**不先建空框架。**
+**Do not build an empty framework first.**
 
-迁移是最难回头的部分。空表建好、发布了，等真接入时发现 schema 不够用（聚合该用数组还是关联表、`min_role` 该在行上还是按 kind 硬编码），改迁移就得走升级路径。而现在还没打 tag，迁移可以推倒重来 —— 这个窗口不该浪费在一张没有数据流过的表上。
+A migration is the hardest part to walk back. Ship an empty table, and by the time real data flows through it, the schema may turn out wrong (should grouping use an array or a join table, should `min_role` live on the row or be hardcoded per kind), and fixing a migration after release means an upgrade path. No version has been tagged yet, so migrations can still be redone from scratch — that window should not be spent on a table no data has ever passed through.
 
-更要紧的是：**聚合、自愈、per-user 已读这三件最容易设计错的事，只有真有数据经过才验得出来。** 空框架把它们全留到了以后。
+More importantly: **grouping, self-healing, and per-user read state — the three easiest things to design wrong — can only be checked once real data flows through them.** An empty framework defers all three to later.
 
-> **这一段被验证了，方式跟预期的不一样**：真有数据经过之后，三件里有两件被证明是错的
-> ——而且都是先照原设计写出来、跑起来才看出来的。要是先建了空框架、
-> 等到有第二第三种告警才接真实数据，这两个设计早就随迁移发出去了。
+> **This turned out to be true, in a way stronger than expected**: once real data flowed through, two of the three designs turned out wrong — and both were only caught by writing them, running them, and watching them fail. Had an empty framework shipped first, waiting for a second and third alert type before connecting real data, both wrong designs would already have gone out in a migration.
 
-所以第一刀接**两条真实告警源**，各验一条权限路径，且都不需要新的检测逻辑：
+So the first cut wires up **two real alert sources**, each testing one permission path, and neither needing new detection logic:
 
-| kind | 级别 | 验证什么 | 结果 |
+| Kind | Level | Tests | Result |
 |---|---|---|---|
-| `source.sync_failed` | KB 级 | 聚合、自愈、`min_role=editor` | 聚合改到视图层；自愈作废；权限如设计 |
-| `llm.unreachable` | 系统级 | `kb_id IS NULL` 那条路径、`is_admin` 可见性 | 它没有成功信号，就是这一条逼出了第 2 节的推翻 |
+| `source.sync_failed` | KB level | Grouping, self-healing, `min_role=editor` | Grouping moved to the view layer; self-healing scrapped; permissions worked as designed |
+| `llm.unreachable` | System level | The `kb_id IS NULL` path, `is_admin` visibility | It has no success signal — this is exactly what forced the reversal in decision 2 |
 
-> **后续（2026-09-02 核）**：第一刀之后又接了三条，**没有一条需要新的检测逻辑**，都是把已有的错误分类接上来：
-> `llm.rate_limited`（#160，退避用尽仍过不去）、`llm.out_of_credit`（#182，402 或「余额不足」文案，与限流分开——该找的人不同）、
-> `data_source.schema_sync_failed`（源挂上了但表结构没摄进来）。分类做成纯函数 `alert_for` 并有单测，
-> 因为判据是错误的**类型**不是文本。最后一条值得记：它报的是「留下的状态」不是「那次失败」，
-> 是第一条不由一次执行失败直接触发的告警，与上文「任何执行路径在失败时上报」的表述有出入。
+> **Follow-up (checked 2026-09-02)**: three more alert kinds shipped after the first cut, **none needing new detection logic** — each just wires up an error classification that already existed:
+> `llm.rate_limited` (#160, still failing after backoff is exhausted), `llm.out_of_credit` (#182, a 402 status or "insufficient balance" message, kept separate from rate limiting since the right audience differs), and `data_source.schema_sync_failed` (a source connects, but its table schema failed to sync). Classification is one pure function, `alert_for`, with unit tests, because the rule keys on the error's **type**, not its text. This last one is worth noting: it reports **a standing state**, not **a single failed run** — the first alert not triggered directly by one execution failure, which does not quite match "any execution path reports on failure," stated above.
 >
-> 面板顺带长出了搜索与按组分页（每页 8 组、每组最多 5 条明细）。搜索**刻意搜不到标题**——
-> 标题是前端按 kind 查表拼的（[0004](0004-language-and-localization.md)：服务端不产出展示文案），
-> 服务端只能匹配库名、detail、kind 代号。
+> The panel also gained search and grouped pagination (8 groups per page, up to 5 detail rows per group). Search **deliberately cannot match a title** — a title is built on the frontend from a lookup table keyed by kind ([0004](0004-language-and-localization.md): the server must not produce display text). The server can only match against a base name, a detail string, or a kind code.
 >
-> **一条本文该划而没划的边界**：`extraction_drops`（11 种丢弃原因，读者是上传文档的人）是另一条完全独立的失败信号通道，
-> 它与告警的分工是「这份文档里有东西没落地」对「系统某处坏了」——前者按文档聚在文库行上，后者进铃铛。
-> 两者都不进 Review：Review 管知识的对错。
+> **One boundary this document should have drawn and did not**: `extraction_drops` (11 discard reasons, read by the person who uploaded the document) is a fully separate failure channel. Its division of labor with alerts is "something in this document did not land" versus "something in the system is broken" — the former groups on the document's row in the library, the latter goes to the bell icon. Neither goes into Review: Review is about right and wrong in the knowledge, not about failures.
 
-**如果设计有错，这一刀就会暴露** —— 确实暴露了，见上面两条修订记录。
+**If the design had a flaw, this cut would surface it** — and it did, twice, recorded in the two revision notes above.
 
-`llm.unreachable` 的判据在实现中也放宽过一次：起初只认传输层失败（连不上），
-结果最常见的那种故障——URL 配错、代理挡在中间回了 HTML——**一条告警都不产生**，
-正是"失败无声"本身。现在它的含义是"没能从端点拿到一个能解析的回答"：
-连不上，或者连上了但回来的不是这个 API。端点干干净净地回 4xx 不算 ——
-那说明它就是模型 API，只是密钥或配额不对，该找的人不同。
+The rule for `llm.unreachable` was also loosened once during implementation: at first it only caught transport-layer failures (cannot connect at all), and the most common real failure — a wrong URL, or a proxy in the middle returning an HTML page — **produced no alert at all**, which is exactly the "silent failure" this feature exists to prevent. It now means "failed to get a parseable answer from the endpoint": either it cannot connect, or it connects but the response is not from this API. A clean 4xx response from the endpoint does not count — that means it is the right model API, just a wrong key or quota, and needs a different audience.
 
-UI：顶栏铃铛 + **弹出面板**，不是页面 —— 告警是顺手瞄一眼的东西，
-做成页面会逼人离开手头的事，而离开的代价就是没人去看。
-未读是一个红点不是数字（"有事没看"是二元的，而数字会随重试一路往上跳），
-**点击才算读过，不是划过**（鼠标经过一列告警不代表看过它们，而已读落下就不会自己回来）。
+UI: a bell icon in the top bar, opening a **popover panel**, not a full page — an alert is something to glance at in passing; a full page would force someone to leave what they are doing, and that cost means fewer people look at all. Unread is a red dot, not a number ("something unseen" is binary; a number would keep climbing with every retry). **Reading counts only on a click, not on a hover** (a mouse passing over a list of alerts does not mean they were seen, and a read mark, once set, does not come back on its own).
 
-### 留到第二批
+### Left for a later batch
 
-**`document.no_text_layer`（扫描件）** —— 它需要先写检测逻辑（判断解析结果为空），
-而且真正有用是在有了 OCR 端点之后：那时提示语才完整 ——「文档没有文本层，
-配置 OCR 端点后可重新处理」，同时是错误说明和功能引导。
+**`document.no_text_layer` (a scanned document)** — this needs detection logic first (checking whether the parse result came back empty), and it becomes genuinely useful only once an OCR endpoint exists: only then is the message complete — "this document has no text layer; configure an OCR endpoint and reprocess it" — both an explanation and a call to action.
 
-接它的时候**不要再想"什么时候算修好了"**（见第 2 条）：一份扫描件解析为空就记一条，
-12 份就是 12 行，面板把连着的折成一行并显示计数。重新处理成功之后不用去清任何东西 ——
-不再有新故障，那些行自己沉下去，到期被保留期清理。
+When this ships, **do not bring back "when is it fixed" thinking** (see decision 2). One scanned document with an empty parse result writes one row; 12 documents write 12 rows; the panel folds adjacent ones into a group with a count. Once reprocessing succeeds, nothing needs to be cleared — no new failures appear, the old rows sink out of view, and expiry clears them in time.
 
 ---
 
-## 被否决的方案
+## Rejected alternatives
 
-**复用 `audit_events`。** 那张表是"谁做了什么"的台账，性质是不可变记录；告警是"出了什么事"，需要 per-user 已读与折叠展示。塞进同一张表会让台账不再是台账。
+**Reuse `audit_events`.** That table is a ledger of "who did what," meant to be immutable; alerts are "what went wrong," needing per-user read state and grouped display. Putting them in one table would stop the ledger from being a ledger.
 
-> **修订记录**：原文这一条的理由是"告警需要状态流转（未读 → 已读 → 已解决）"。
-> 状态流转那部分随第 2 条作废了 —— 告警行现在也是不可变记录。
-> **但结论不变**，只是理由换了一条：台账记的是人做的事，告警记的是系统出的事，
-> 两者的保留期、可见性规则、读者都不同（告警 30 天到期清理，台账不能清）。
+> **Revision note**: the original reasoning here was "alerts need a state machine (unread → read → resolved)." The state-machine part is gone along with decision 2 — an alert row is also immutable now.
+> **The conclusion is unchanged, for a different reason**: the ledger records what a person did, an alert records what the system got wrong. They differ in retention (alerts expire after 30 days; the ledger never does), in visibility rules, and in audience.
 
-**不建表，把六处失败状态 union 起来查询展示。** 零迁移、零新概念，但存不下 per-user 已读，
-也留不住历史 —— 来源修好之后 `last_sync_status` 就变了，"上周三那次为什么没进来"再也查不到。
+**No new table; query and display the union of the six existing failure states.** Zero migrations, zero new concepts — but this cannot hold per-user read state, and it loses history: once a source is fixed, `last_sync_status` changes, and "why did last Wednesday's sync fail" can no longer be answered.
 
-**共享已读**。见上文「三个决定」第 3 条。
+**Shared read state.** See decision 3 above.
 
-**存储层聚合**、**自愈 + 探针**、**按 `(kb, kind, subject)` 去重**。
-见第 1、2 条的修订记录 —— 前两个是先建成再拆的，第三个在纸面上就否掉了。
+**Storage-layer grouping**, **self-healing plus a probe**, and **de-duplication by `(kb, kind, subject)`**. See the revision notes under decisions 1 and 2 — the first two were built, then torn out; the third was rejected on paper before being built at all.

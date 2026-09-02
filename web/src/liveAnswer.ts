@@ -1,14 +1,20 @@
-// 正在生成的那一次回答，活在组件之外。
+// The reply currently generating lives outside any component.
 //
-// **切走一次就看不见了。** 流式中的 `turns` 从前是 Chat 的组件状态，而离开
-// 对话页会卸载这个组件：状态没了，那个 fetch 还在跑，回调写进的是一个已经
-// 死掉的组件。切回来时组件重新挂载、从库里读——库里要等生成结束才有那一行，
-// 于是只看得见自己问的那句话。等一会儿再回来就正常，因为那时已经落库了。
+// **Navigating away used to make it disappear.** The streaming `turns`
+// data used to be component state on the Chat page. Leaving the
+// conversation page unmounted that component: the state was gone, but the
+// fetch kept running, and its callbacks wrote into an already-unmounted
+// component. On return, the component remounted and read from the
+// database, but the database only gets that row after generation finishes.
+// So the user saw only the question they had asked. Returning later
+// worked, because the row existed by then.
 //
-// 服务端那半边（生成不随连接消失）是另一条修复；这半边解决的是**回来的时候
-// 看不看得见**。两条缺一不可：服务端保住了答案，这里保住了那条流。
+// The server-side fix, which keeps generation running independent of the
+// connection, is a separate change. This module fixes **whether the reply
+// is visible on return.** Both fixes are needed: the server preserves the
+// answer, and this module preserves the stream.
 //
-// 同时只会有一次进行中的回答——所以这是个单例，不是按会话开的表。
+// Only one reply can generate at a time, so this is a singleton store, not a table keyed by conversation.
 import type { ChatStep, Source } from "./api";
 
 export interface Turn {
@@ -22,9 +28,11 @@ export interface Turn {
 interface Live {
   conversationId: string | null;
   turns: Turn[];
-  /** 停止按钮用；切页面**不调它**，那正是这次修复的意思 */
+  /** Used by the stop button. Navigating to another page **does not call
+   *  this**; that is the point of this fix. */
   abort: () => void;
-  /** 还在写，还是已经写完。**写完不清空**——见 `finish` */
+  /** Whether the reply is still writing or has finished. **Finishing does
+   *  not clear the state**; see `finish` below. */
   streaming: boolean;
 }
 
@@ -36,7 +44,7 @@ function emit() {
 }
 
 export const liveAnswer = {
-  /** `useSyncExternalStore` 要求同一个快照对象在没变时保持同一引用 */
+  /** `useSyncExternalStore` requires the same snapshot reference when nothing has changed. */
   get: () => live,
   subscribe: (l: () => void) => {
     listeners.add(l);
@@ -48,13 +56,13 @@ export const liveAnswer = {
     live = { conversationId, turns, abort, streaming: true };
     emit();
   },
-  /** 会话是流式中途新建的：`onConversation` 回来才知道 id */
+  /** The conversation is created partway through streaming. Its id becomes known only when `onConversation` fires. */
   identify: (conversationId: string) => {
     if (!live) return;
     live = { ...live, conversationId };
     emit();
   },
-  /** 改最后一轮（助手那一轮）。生成期间只有它在变 */
+  /** Updates the last turn (the assistant's turn). During generation, this is the only turn that changes. */
   patchLast: (f: (t: Turn) => Turn) => {
     if (!live) return;
     const turns = [...live.turns];
@@ -62,15 +70,20 @@ export const liveAnswer = {
     live = { ...live, turns };
     emit();
   },
-  /** 结束（正常、出错、或人按了停止）。
+  /** Ends the reply (on success, on error, or when the user presses stop).
    *
-   * **不清空。** 清空过一版，那一版有个很难看的 bug：切走时组件卸载，
-   * 而「把最终结果交回组件」是调在已经死掉的那个组件上——空操作。于是
-   * store 空了、新组件早前已经认领过这一场因而不会再去读库，切回来
-   * 整场对话一片空白，连自己问的那句都没有。
+   * **This does not clear the state.** An earlier version cleared it, and
+   * that version had a hard-to-see bug: navigating away unmounted the
+   * component, so "hand the final result back to the component" called
+   * into an already-unmounted component and did nothing. The store then
+   * went empty, and the new component, having already claimed this reply
+   * earlier, did not read from the database again. On return, the whole
+   * conversation appeared blank, including the user's own question.
    *
-   * 那一刻这里是唯一还握着这份内容的地方，所以留着：只把 `streaming`
-   * 落下来。下一次 `start` 会替掉它，切到别的会话时 id 对不上自然不显示。
+   * At that moment, this store is the only place still holding the
+   * content, so it stays here; only `streaming` changes to `false`. The
+   * next `start` call replaces it, and switching to a different
+   * conversation naturally hides it, because the id no longer matches.
    */
   finish: () => {
     if (!live) return;

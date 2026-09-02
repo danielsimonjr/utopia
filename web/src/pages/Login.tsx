@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Link, useNavigate } from "@tanstack/react-router";
 
-/* lucide 已移除品牌图标，GitHub mark 内联（官方 mark 路径，fill=currentColor） */
+/* lucide removed brand icons, so this inlines the GitHub mark (the official mark path, with fill=currentColor). */
 function GithubMark({ size = 16 }: { size?: number }) {
   return (
     <svg
@@ -37,7 +37,8 @@ export function Login() {
       return api.register(email, password, displayName);
     },
     onSuccess: () => {
-      // 谢幕：卡片上浮淡出、巨构放大穿越，再进入图谱首页
+      // Exit sequence: the card fades and floats up, the megastructure zooms
+      // past the camera, then the app enters the graph home page.
       setLeaving(true);
       window.setTimeout(() => navigate({ to: "/" }), 650);
     },
@@ -54,7 +55,7 @@ export function Login() {
 
   return (
     <div className="min-h-screen flex items-center justify-center px-4">
-      {/* 巨构变换背景：星球 → 环形都市 → 城市平原 → 波动巨碑 */}
+      {/* Megastructure transform background: planet -> ring city -> city plain -> wave monolith */}
       <LoginScene leaving={leaving} />
       <div
         className={`relative z-10 w-full max-w-sm ${leaving ? "u-depart" : ""}`}
@@ -138,7 +139,7 @@ export function Login() {
           </form>
         </div>
 
-        {/* 页脚：惯用同意句式内嵌条款/隐私链接 + GitHub 入口 */}
+        {/* Footer: standard consent text with inline links to terms and privacy, plus a GitHub link */}
         <div
           className="mt-6 text-center u-rise"
           style={{ animationDelay: "180ms" }}

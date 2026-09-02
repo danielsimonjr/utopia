@@ -26,7 +26,8 @@ export function DocViewer() {
     queryKey: ["docDetail", docId],
     queryFn: () => api.documentDetail(docId),
   });
-  // 反向证据链：各分块抽出的事实（一次取整文档，按 chunk 分组）
+  // Reverse evidence chain: the facts extracted from each chunk. This
+  // fetches the whole document at once and groups the facts by chunk.
   const extractions = useQuery({
     queryKey: ["docExtractions", docId],
     queryFn: () => api.documentExtractions(docId),
@@ -40,18 +41,20 @@ export function DocViewer() {
     return map;
   }, [extractions.data]);
 
-  // null = 自动定位：有引用跳转时翻到目标分块所在页
+  // `null` means auto-locate: on a citation jump, the viewer flips to the page with the target chunk.
   const [page, setPage] = useState<number | null>(null);
   useEffect(() => setPage(null), [chunk, docId]);
 
   const highlightRef = useRef<HTMLDivElement>(null);
-  // 引用跳转：滚动到目标分块点亮一下，稍候淡出恢复普通状态（不常驻高亮）
+  // Citation jump: this scrolls to the target chunk and lights it up
+  // briefly, then fades back to normal. The highlight is not permanent.
   const [flash, setFlash] = useState(false);
   useEffect(() => {
     if (detail.data && highlightRef.current) {
       highlightRef.current.scrollIntoView({ behavior: "smooth", block: "center" });
       setFlash(true);
-      // 平滑滚动本身耗几百毫秒，点亮窗口要留足滚动后的可视时间
+      // The smooth scroll itself takes a few hundred milliseconds, so the
+      // highlight window must leave enough visible time after the scroll ends.
       const t = setTimeout(() => setFlash(false), 2600);
       return () => clearTimeout(t);
     }
@@ -73,7 +76,8 @@ export function DocViewer() {
 
   return (
     <div className="h-full flex">
-      {/* 来源栏常驻：当前文档所属文件夹高亮，点其他文件夹跳回 Library 对应视图 */}
+      {/* The sources rail stays visible. It highlights the current document's
+          folder. Clicking another folder returns to the matching Library view. */}
       <SourcesRail
         kbId={doc.kb_id}
         active={doc.source_id ?? "uploads"}
@@ -120,7 +124,8 @@ export function DocViewer() {
                   {c.text}
                 </div>
 
-                {/* 抽取对照栏：这个分块产出了哪些事实（实体可跳图谱） */}
+                {/* Extraction comparison panel: the facts produced by this
+                    chunk (each entity links to the graph). */}
                 {facts.length > 0 && (
                   <aside className="w-64 shrink-0 rounded-xl border border-white/10 bg-white/[0.02] p-3">
                     <div className="mb-2 text-[10px] font-medium uppercase tracking-[0.08em] text-neutral-600">

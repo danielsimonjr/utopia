@@ -1,5 +1,7 @@
-/* 账户层"我的知识库"：可访问的库 + 我的角色 + 加入信息 + 概览统计。
-   只读全景——建库是管理动作，入口在 System settings › Knowledge bases。 */
+/* Account-level "My knowledge bases" page: accessible KBs, the user's role
+   in each, join info, and overview statistics.
+   This view is read-only. Creating a KB is an admin action, available
+   under System settings > Knowledge bases. */
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { Lock } from "lucide-react";

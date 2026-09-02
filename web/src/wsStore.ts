@@ -1,4 +1,5 @@
-// 当前工作区/知识库选择：localStorage 持久化 + useSyncExternalStore 订阅。
+// Current workspace/KB selection: persists in localStorage, subscribed
+// through useSyncExternalStore.
 function makeStore(key: string) {
   let current: string | null =
     typeof localStorage !== "undefined" ? localStorage.getItem(key) : null;

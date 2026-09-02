@@ -1,13 +1,16 @@
-// 当前工作区/知识库上下文：均可切换且 localStorage 记忆；工作区无 KB 时自动创建 "General"。
+// Current workspace/KB context: both are switchable and persist in
+// localStorage. When a workspace has no KB, this creates one named "General".
 import { useCallback, useSyncExternalStore } from "react";
 import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type Kb, type Workspace } from "./api";
 import { kbStore, wsStore } from "./wsStore";
 
-/** 当前路径里的知识库 id。**页面都在 /kb/$kbId 之下，所以直接从路径取**——
- *  不必等库列表加载完，链接里写的是谁就是谁。不在作用域内（账户页等）时
- *  回落到记忆里的那个。 */
+/** The KB id from the current path. **Every page lives under
+ *  `/kb/$kbId`, so this reads the id straight from the path.** It does not
+ *  wait for the KB list to load; the link determines the id directly.
+ *  Outside that scope, such as the account pages, this falls back to the
+ *  stored id. */
 export function useKbId(): string {
   const params = useParams({ strict: false }) as { kbId?: string };
   const { kb } = useKb();
@@ -35,8 +38,10 @@ export function useKb(): {
     queryFn: async () => {
       const existing = await api.kbs(ws!.id);
       if (existing.length > 0) return existing;
-      // 空工作区自动创建 General——建库现在是管理员动作，非管理员会 403：
-      // 静默等管理员来创建（现实中首个用户即管理员，General 总在）
+      // An empty workspace gets a "General" KB automatically. Creating a KB
+      // is now an admin action, so a non-admin call returns 403.
+      // On that error, wait silently for an admin to create it. In
+      // practice, the first user is an admin, so "General" always exists.
       try {
         const created = await api.createKb(ws!.id, { name: "General" });
         queryClient.invalidateQueries({ queryKey: ["kbs", ws!.id] });
@@ -49,27 +54,37 @@ export function useKb(): {
   });
 
   const kbList = kbs.data ?? [];
-  /* **URL 里有就以 URL 为准**：两者回答的不是同一个问题——地址栏说的是
-     "这个链接指向什么"，localStorage 说的是"我上次在看什么"。
-     别人分享的链接必须赢过我自己的记忆，否则打开看到的是我的库、
-     数据不同而界面一模一样 */
+  /* **When the URL has a KB id, the URL wins.** The two sources answer
+     different questions: the address bar answers "what does this link
+     point to", and localStorage answers "what was I looking at last".
+     A link shared by another user must win over the local memory.
+     Otherwise, the page opens to the wrong KB, with a different data
+     set behind an identical-looking interface. */
   const routeParams = useParams({ strict: false }) as { kbId?: string };
   const wantedKbId = routeParams.kbId ?? selectedKbId;
   const kb = kbList.find((k) => k.id === wantedKbId) ?? kbList[0] ?? null;
 
-  /* **换库是一次导航，不只是记一笔。**
-     上面那条"URL 优先"是对的，代价是：作用域内每一页的地址里都写着 kbId，
-     于是 `selectedKbId` 永远轮不到。只写 store 的话，值变了、组件也重渲染了，
-     算出来的还是同一个库——顶栏那个下拉因此在 `/kb/$kbId/*` 下**整个是死的**，
-     点了没反应，刷新之后才生效（首页重定向读的是记忆）。
+  /* **Switching the KB is a navigation, not only a stored change.**
+     The "URL wins" rule above is correct, but it has a cost: every page
+     in scope has a KB id in its address, so `selectedKbId` never takes
+     effect on its own. Writing only to the store changes the value and
+     re-renders the component, but the computed KB stays the same. As a
+     result, the top-bar dropdown becomes **fully inactive** under
+     `/kb/$kbId/*`: a click does nothing until the next page reload (and
+     the home redirect reads the stored value at that point).
 
-     所以把导航并进 `setKb` 本身，而不是要求每个调用点记得配一次 `navigate`——
-     漏掉的正是那两处（顶栏下拉、Chat 的范围切换器），而写对的三处都是
-     "跳去某个具体页面"顺带把库带上的。忘得掉的约定就是会被忘掉的约定。
+     So this merges the navigation into `setKb` itself, instead of
+     requiring every call site to remember a matching `navigate` call.
+     Two call sites had missed exactly that step (the top-bar dropdown and
+     the Chat scope switcher), while the three correct call sites all
+     navigated to a specific page and carried the KB id along by chance.
+     A convention that depends on memory gets forgotten.
 
-     停在当前这一页：在本体页换库，该看到另一个库的本体，而不是被送回图谱。
-     地址里没有 kbId 时（账户页等）只记一笔——那里本来就不该被拽走，
-     调用方自己决定跳哪去。 */
+     This stays on the current page: switching the KB on the ontology page
+     should show the other KB's ontology, not redirect to the graph page.
+     When the address has no KB id, such as on the account pages, this
+     only updates the store; that scope should not force a redirect, so
+     the caller decides where to navigate. */
   const navigate = useNavigate();
   const pathname = useLocation({ select: (l) => l.pathname });
   const currentKbId = routeParams.kbId;

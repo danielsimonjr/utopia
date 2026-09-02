@@ -2,8 +2,8 @@ name: Star History
 
 on:
   schedule:
-    # 每天一次。星标曲线一周才动一次的话，图上那一段是平的——
-    # 而它存在的意义正是让人看见增长的形状
+    # This runs once a day. The star curve updated only once a week would show a flat
+    # segment on the chart, and the chart exists to show the shape of growth.
     - cron: "0 0 * * *"
   workflow_dispatch:
 
@@ -13,15 +13,18 @@ permissions:
 jobs:
   star-history:
     runs-on: ubuntu-latest
-    # 网络接口卡住的话不该跑满 GitHub 的六小时上限。翻页 + 画图实测不到一分钟
+    # If the network hangs, the job must not run until GitHub's six-hour limit. Paging
+    # through the API and rendering the chart takes under a minute in testing.
     timeout-minutes: 10
     steps:
-      # 图由 `scripts/star-history.mjs` 生成，不再用第三方 action。
+      # The script `scripts/star-history.mjs` generates the chart. This no longer uses a
+      # third-party action.
       #
-      # 换掉 `lowlighter/metrics` 有两个理由。一是它把「累计总数」和
-      # 「每天新增」绑在同一个开关上，模板里没有只留累计那张的办法，
-      # 而想要的就是传统的那一条曲线。二是**它是跑在 `contents: write`
-      # 之下的第三方代码**——这个权限底下跑我们自己的脚本，安心得多。
+      # This replaced `lowlighter/metrics` for two reasons. First, that action ties the
+      # cumulative total and the daily new-stars count to the same toggle, with no way to
+      # keep only the cumulative chart. The cumulative curve is the one this project wants.
+      # Second, **that action is third-party code running under `contents: write`.**
+      # Running our own script under that permission is safer.
       - uses: actions/checkout@v4
 
       - uses: actions/setup-node@v4
@@ -31,30 +34,34 @@ jobs:
       - name: Render the chart
         env:
           REPO: ${{ github.repository }}
-          # **`GITHUB_TOKEN` 在这里不够**：GitHub 在 2026-06-30 把星标
-          # 时间线限制成只有仓库的管理员/协作者可读。这个 secret 是一个
-          # classic token（fine-grained 的读不了这份数据），已经验过能取到。
-          # 名字沿用 `METRICS_TOKEN` 是为了不必再改一次仓库设置
+          # **The default `GITHUB_TOKEN` is not enough here.** On 2026-06-30, GitHub
+          # restricted the star timeline to repository admins and collaborators. This
+          # secret holds a classic token; a fine-grained token cannot read this data.
+          # Testing confirmed this token can fetch it. This keeps the name
+          # `METRICS_TOKEN` to avoid changing the repository settings again.
           GITHUB_TOKEN: ${{ secrets.METRICS_TOKEN }}
           OUT: chart/star-history.svg
         run: node scripts/star-history.mjs
 
-      # **提交到专用的孤儿分支，不碰默认分支。**
-      # `dev` 上有分支保护（必须走 PR、`enforce_admins: true`），机器人
-      # 直推一定被拒；而为了一张图去松保护是本末倒置。`assets` 与 `dev`
-      # 没有共同历史，在那边提交碰不到任何源码。
+      # **This commits to a dedicated orphan branch and never touches the default branch.**
+      # The `dev` branch has branch protection (a pull request is required, and
+      # `enforce_admins: true` is set), so a direct bot push would always fail. Loosening
+      # that protection just for a chart would defeat its purpose. The `assets` branch
+      # shares no history with `dev`, so a commit there never touches any source code.
       - name: Commit to the assets branch
         run: |
           set -euo pipefail
           git clone --depth 1 --branch assets \
             "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" out
           mkdir -p out/assets
-          # 两张：深色主题用白线那张，浅色用深线那张（README 里 `<picture>`
-          # 按主题选）。白线在 GitHub 浅色底上是看不见的，所以少一张都不行
+          # This saves two files: a white-line chart for the dark theme, and a
+          # dark-line chart for the light theme. The README's `<picture>` element picks
+          # one based on the active theme. A white line is invisible against GitHub's
+          # light background, so both files are required.
           cp chart/star-history.svg chart/star-history-light.svg out/assets/
           cd out
-          # 星标没变化的那天不留空提交——每天一条 "no change" 会把
-          # 这个分支的历史淹掉
+          # This skips an empty commit on a day with no new stars. A daily "no change"
+          # commit would flood this branch's history.
           if git diff --quiet -- assets/; then
             echo "chart unchanged, nothing to commit"
             exit 0

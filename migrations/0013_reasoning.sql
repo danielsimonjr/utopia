@@ -1,34 +1,43 @@
--- 推理机 R0 补完 + R1 物化推导（见 docs/decisions/0002）。
+-- The reasoning engine: the rest of check R0, plus R1 materialized derivation (see docs/decisions/0002).
 
--- ============ R0 的另一半：本体自己的自洽性 ============
+-- ============ The rest of R0: the ontology's own consistency ============
 --
--- `axiom_violations` 说的是「事实与定义抵触」，这张说的是「定义自己站不住」。
--- 分开不是分类癖：一个自相矛盾的本体会让事实层的结论**全部可疑**——若某个谓词
--- 同时声明了 symmetric 与 asymmetric，那么据它报出来的每一条反对称违规都建立在
--- 一个本来就不成立的前提上。所以界面上这一档排在前面。
+-- axiom_violations covers "a fact contradicts a definition." This table covers "a
+-- definition contradicts itself." These are separate tables for a real reason: a
+-- self-contradictory ontology makes **every** conclusion at the fact layer suspect. If a
+-- predicate declares itself both symmetric and asymmetric, then every asymmetry
+-- violation reported against it rests on a premise that was never valid to begin with.
+-- This is why this check is listed first in the interface.
 --
--- 形状也不同：那张表的两列是 `facts` 的外键，而这里指的是类与谓词。
+-- The shape differs too: the two columns on that table are foreign keys into facts, while
+-- this table's columns point at classes and predicates.
 CREATE TABLE ontology_defects (
     id      UUID PRIMARY KEY,
     kb_id   UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
-    -- symmetric_and_asymmetric  一个谓词同时声明了两者（只对空属性成立）
-    -- transitive_and_functional OWL 2 DL 明文禁止的组合
-    -- subclass_cycle            A ⊂ B ⊂ A，建表的 CHECK 只挡得住自环
-    -- disjoint_with_ancestor    类与自己的祖先互斥 → 永远不可能有实例
-    -- inherits_disjoint         两个祖先互斥 → 同上
+    -- symmetric_and_asymmetric  a predicate declares both (this only holds for an empty relation)
+    -- transitive_and_functional a combination OWL 2 DL explicitly forbids
+    -- subclass_cycle            A subclass of B subclass of A; the table's own CHECK
+    --                           constraint blocks only a direct self-reference
+    -- disjoint_with_ancestor    a class disjoint from its own ancestor, so it can never
+    --                           have an instance
+    -- inherits_disjoint         two ancestors are disjoint, with the same result
     kind    TEXT NOT NULL CHECK (kind IN (
                 'symmetric_and_asymmetric', 'transitive_and_functional',
                 'subclass_cycle', 'disjoint_with_ancestor', 'inherits_disjoint')),
-    -- **两列都是裸 UUID，没有外键。** 前两类指 relation_types，后三类指
-    -- entity_types——同一列指两张表，外键表达不了。而这是派生状态：本体一改
-    -- 就整批重算，指向已删对象的行在下一轮自然消失，不必靠级联兜底
+    -- **Both columns are plain UUID values, with no foreign key.** The first two kinds
+    -- point at relation_types, and the other three point at entity_types; one column
+    -- cannot express a foreign key to two different tables. This is fine because this
+    -- table holds derived state: the whole table is recomputed on every ontology change,
+    -- and a row pointing at a deleted object simply disappears on the next pass, with no
+    -- need for a cascading delete to catch it.
     subject UUID NOT NULL,
     other   UUID,
-    -- 环的路径（按类排列）。其余为空
+    -- The cycle's path, in order of the classes involved; empty for the other kinds.
     path    UUID[] NOT NULL DEFAULT '{}',
     status  TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'resolved')),
-    -- fixed     去本体里改了（改声明、断开继承、撤掉 disjoint）
-    -- accepted  人看过，认为不必改
+    -- fixed     the ontology was changed (a declaration edited, an inheritance link
+    --           removed, a disjoint rule dropped)
+    -- accepted  a person reviewed it and judged that no change is needed
     resolution  TEXT CHECK (resolution IN ('fixed', 'accepted')),
     decided_by  UUID REFERENCES users(id),
     decided_at  TIMESTAMPTZ,
@@ -39,71 +48,90 @@ CREATE TABLE ontology_defects (
 CREATE INDEX ontology_defects_open_idx ON ontology_defects (kb_id, detected_at DESC)
     WHERE status = 'open';
 
--- ============ R1：规则与派生 ============
+-- ============ R1: rules and derivation ============
 
--- 规则**只从本体公理编译**，没有用户自定义 DSL——那是另一个产品（0002）。
+-- Rules **compile only from ontology axioms.** There is no user-defined rule language;
+-- that would be a different product (see ADR 0002).
 --
--- 为什么要一张表而不是把规则种类塞进派生行：`facts.derived_by_rule` 需要一个
--- 指得着的东西，而「这条是靠哪条规则来的」在解释（R2）与「撤掉这条公理，
--- 哪些派生要跟着走」两处都要按规则聚合。
+-- Why this needs its own table, instead of folding the rule kind into the derived row:
+-- facts.derived_by_rule needs something it can point at, and "which rule produced this
+-- row" must be aggregated by rule in two places: explanation (check R2), and answering
+-- "if this axiom is removed, which derived facts must go with it."
 --
--- 它是派生状态：每次推导前按本体重编译一遍。所以身份取 `(kb, 谓词, 种类)`
--- 而不是自增——重编译要能认出「还是那条规则」，否则每跑一次
--- `derived_facts.rule_id` 就指向一个新 id，历史全断。
+-- This table holds derived state: it is fully recompiled from the ontology before every
+-- derivation run. Its identity is therefore (kb, predicate, kind), not an autoincrementing
+-- id; recompiling must recognize "this is still the same rule," or every run would give
+-- derived_facts.rule_id a new value, breaking the history.
 --
--- **公理撤了的规则不删。** `derived_facts` 上已失效的行仍指着它，解释
--- 「当时是靠哪条规则推的」需要它还在。规则一个库也就几条，留着不占地方。
+-- **A rule is not deleted when its axiom is removed.** A row in derived_facts that is
+-- already invalidated still points at it, and explaining "which rule produced this at the
+-- time" needs the rule to still exist. A knowledge base has only a handful of rules, so
+-- keeping old ones costs almost nothing.
 CREATE TABLE rules (
     id           UUID PRIMARY KEY,
     kb_id        UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     predicate_id UUID NOT NULL REFERENCES relation_types(id) ON DELETE CASCADE,
-    -- transitive | symmetric。`inverseOf` 与 `subPropertyOf` 投影侧还没落库，
-    -- 所以也就编不出来——少一条规则不是缺陷，是「没声明就不推」的同一条
+    -- transitive | symmetric. inverseOf and subPropertyOf are not stored yet on the
+    -- import projection side, so no rule compiles for them either; a missing rule here
+    -- is not a defect, it follows the same principle as "nothing not declared gets
+    -- derived."
     kind         TEXT NOT NULL CHECK (kind IN ('transitive', 'symmetric')),
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (kb_id, predicate_id, kind)
 );
 
--- 推出来的事实。**自己一张表，不进 `facts`。**
+-- Derived facts. **This is a separate table; derived facts do not go into facts.**
 --
--- 试过塞进 `facts` 加一位 `derived_by_rule` 标记，那一版的问题是**失败方向反了**：
--- 仓库里有四十多处读 `facts` 的查询，其中只有一处认识那个标记，于是新写一条
--- 查询默认就是把派生当断言看，得记得加过滤。写这个功能的人（我）当场就漏了
--- 两处——低置信审核队列会把派生事实端给人 Confirm/Reject（确认一条推导没有
--- 意义，而拒绝它下一轮会原样推回来，因为前提还在），时态对账会拿一条推导去
--- 闭合一条断言（引擎拿自己的结论改人的数据，0001 判据 2 正好禁止这个）。
+-- An earlier attempt added derived rows into facts with a derived_by_rule flag. That
+-- version failed in the wrong direction: this repository has more than forty queries that
+-- read facts, and only one of them checked that flag, so every new query written after
+-- that point treated a derived row as an assertion by default, unless someone remembered
+-- to add a filter. The person who built this feature (the author of this comment) missed
+-- two such places at the time: the low-confidence review queue offered a derived fact for
+-- Confirm/Reject (confirming a derivation has no meaning, and rejecting it just derives
+-- the same fact again next time, since its premises are unchanged), and temporal
+-- reconciliation used a derived fact to close an asserted one (the engine editing a
+-- person's data using its own conclusion, which criterion 2 of ADR 0001 forbids directly).
 --
--- 分开之后忘了 UNION 的后果是**看不见**派生，而不是**混进去**。
+-- After splitting the tables, forgetting a UNION means a derived fact becomes
+-- **invisible**, not **mixed in** — a safer failure.
 --
--- 另外两条：
+-- Two more reasons:
 --
--- 一、**列本来就不一样**。派生没有 `supersedes`（它没有「纠正」语义）、没有
---    `fact_evidence`（它的证据是前提，在 `fact_derivations` 里）、`confidence`
---    的含义也不同（算出来的，不是模型自报的）。塞一张表里这些列对它全是借用的。
+-- First, **the columns genuinely differ**. A derived fact has no supersedes (it carries
+-- no "correction" meaning), no fact_evidence (its evidence is its premises, held in
+-- fact_derivations), and its confidence means something different (computed, not
+-- self-reported by a model). Every one of these columns would be borrowed if placed on one table.
 --
--- 二、**数量级差一档**。0002 在真实语料上量过 185 → 828，派生可能是断言的四倍多。
---    让每一条 `facts` 查询都去过滤掉大半行，是白付的代价。
+-- Second, **the row counts differ by an order of magnitude.** ADR 0002 measured this on
+-- real text: 185 asserted facts produced 828 derived facts, more than four times as many.
+-- Making every query against facts filter out most of its rows would be a cost paid for nothing.
 CREATE TABLE derived_facts (
     id           UUID PRIMARY KEY,
     kb_id        UUID NOT NULL REFERENCES knowledge_bases(id) ON DELETE CASCADE,
     subject_id   UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
-    -- **非空**，与 `facts.predicate_id` 不同：规则是挂在谓词上的，没有谓词
-    -- 就没有规则，也就推不出这一行
+    -- **Required, unlike facts.predicate_id.** A rule attaches to a predicate; with no
+    -- predicate, there is no rule, and so nothing to derive this row from.
     predicate_id UUID NOT NULL REFERENCES relation_types(id) ON DELETE CASCADE,
-    -- 同样非空：公理谈的是实体之间的关系，字面值宾语的属性事实不参与推导
+    -- Also required: an axiom describes a relationship between entities, so an
+    -- attribute fact with a literal object takes no part in derivation.
     object_id    UUID NOT NULL REFERENCES entities(id) ON DELETE CASCADE,
     rule_id      UUID NOT NULL REFERENCES rules(id),
-    -- 有效期取前提的交集（0002 开放问题里给的语义）。精度与 `facts` 同一套
-    -- 不变量：有日期才有精度
+    -- The validity interval is the intersection of the premises' intervals (the meaning
+    -- given in ADR 0002's open questions). Precision follows the same invariant as
+    -- facts: a NULL date carries no precision.
     valid_from   TIMESTAMPTZ,
     valid_to     TIMESTAMPTZ,
     valid_from_precision TEXT,
     valid_to_precision   TEXT,
-    -- 前提里最小的那个。一条链只和它最弱的一环一样可信
+    -- The lowest confidence among the premises. A chain is only as trustworthy as its
+    -- weakest link.
     confidence   REAL NOT NULL DEFAULT 1.0,
     derived_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- 前提没了就置这个，**不删行**：与拒绝一条事实完全同构，记录轴上留下
-    -- 「我们曾据此推出，后来前提没了」，实体历史页面直接就能展示（0002 第 3 节）
+    -- Set when a premise is gone. **This does not delete the row**, following the same
+    -- pattern as rejecting a fact: the recorded axis keeps a trace of "this was once
+    -- derived here, and later its premise disappeared," which an entity's history page
+    -- can display directly (see ADR 0002, section 3).
     invalidated_at TIMESTAMPTZ,
     CONSTRAINT derived_from_precision_matches_date
       CHECK ((valid_from IS NULL) = (valid_from_precision IS NULL)),
@@ -111,22 +139,25 @@ CREATE TABLE derived_facts (
       CHECK ((valid_to IS NULL) = (valid_to_precision IS NULL))
 );
 
--- 图要按 (主, 宾) 取边；对账要按三元组 + 区间认出「还是那一条」
+-- The graph reads edges by (subject, object); reconciliation identifies "is this still
+-- the same derivation" by the full triple plus the interval.
 CREATE INDEX derived_facts_live_idx
     ON derived_facts (kb_id, subject_id, object_id) WHERE invalidated_at IS NULL;
 CREATE UNIQUE INDEX derived_facts_identity_idx
     ON derived_facts (kb_id, subject_id, predicate_id, object_id, valid_from, valid_to)
     WHERE invalidated_at IS NULL;
 
--- 证明树的一层：这条派生用了哪几条前提。
+-- One layer of the proof tree: which premises a derived fact used directly.
 --
--- **不存整棵树，只存直接前提。** 顺着这张表递归展开就是完整的证明（R2 要的
--- 东西）。存整棵树是同一份信息记 N 遍，而 N 是路径数。
+-- **This stores only the direct premises, not the whole tree.** Expanding this table
+-- recursively produces the full proof (what check R2 needs). Storing the whole tree would
+-- record the same information N times, where N is the number of paths through it.
 --
--- 前提一律是断言（`facts`）：推导的输入里排除了派生，否则同一次调用的输出会
--- 变成下一次的输入，重跑结果依赖上一轮的残留。
+-- A premise is always an asserted fact (from facts). Derivation excludes derived facts
+-- from its own inputs; otherwise, the output of one run could become the input to the
+-- same run, and a later re-run would depend on state left over from an earlier one.
 --
--- `seq` 保证顺序：`A→B→C→D` 的证明读起来要是这个顺序，人才看得懂链是怎么走的。
+-- seq fixes the order: a proof for A->B->C->D must read back in that order for a person to follow the chain.
 CREATE TABLE fact_derivations (
     derived_fact_id UUID NOT NULL REFERENCES derived_facts(id) ON DELETE CASCADE,
     premise_fact_id UUID NOT NULL REFERENCES facts(id) ON DELETE CASCADE,
@@ -134,29 +165,40 @@ CREATE TABLE fact_derivations (
     PRIMARY KEY (derived_fact_id, seq)
 );
 
--- 「这条前提被撤了，哪些派生要跟着失效」——反向查，主键覆盖不了
+-- "This premise was retracted; which derived facts must follow it" is a reverse lookup
+-- the primary key alone cannot support.
 CREATE INDEX fact_derivations_premise_idx ON fact_derivations (premise_fact_id);
 
--- 推理开关。**默认关**：R1 会往图里加东西，而 0001 判据 2 说「本体是引导不是
--- 执法」——声明可能是错的，所以不该在用户没表态时就按它改图。
+-- The reasoning toggle. **This defaults to off.** R1 adds rows to the graph, and
+-- criterion 2 of ADR 0001 states that the ontology guides but does not enforce: a
+-- declaration can be wrong, so the system should not change the graph based on it before
+-- a user has approved that behavior.
 --
--- 放在 KB 上而不是部署上：一个库的本体带公理、另一个库全是自由文本抽出来的，
--- 该不该推是按库不同的。
+-- This setting lives on the knowledge base, not the deployment, because whether
+-- derivation should run varies by base: one base's ontology may carry solid axioms, while
+-- another is built entirely from loosely extracted free text.
 ALTER TABLE knowledge_bases
     ADD COLUMN materialize_inferences BOOLEAN NOT NULL DEFAULT FALSE;
 
--- 多久重推一次。**必须定时,不能只靠手点**：事实是持续变的（每篇文档抽取都在
--- 加边），而派生只在跑的那一刻算。不定时的话，下一篇文档进来之后图上的派生就
--- 是**缺的**——不是错的（前提还在），是新链没推出来，而这种缺失界面上看不出来。
+-- How often re-derivation runs. **This must run on a schedule, not only on demand.**
+-- Facts change continuously (every document extraction adds edges), while a derivation
+-- is computed only at the moment it runs. Without a schedule, after the next document
+-- arrives, the derived facts in the graph become **missing**, not wrong (their premises
+-- are still there); the new chain simply has not been derived yet, and this kind of gap
+-- is invisible in the interface.
 --
--- 跟来源同步同一个形状：一个间隔 + 一个上次时间，调度器每分钟扫一遍到期的。
--- 60 分钟是拍的：推导是纯计算不花钱，但在增量维护（0002 R3）做出来之前每次都是
--- 全库重算，所以也不该太密。
+-- This follows the same shape as source syncing: an interval plus a last-run time, with a
+-- scheduler scanning for due knowledge bases every minute. 60 minutes is a starting
+-- estimate: derivation is pure computation with no external cost, but until incremental
+-- maintenance ships (ADR 0002, check R3), each run recomputes the whole knowledge base,
+-- so this interval should not be too short either.
 ALTER TABLE knowledge_bases
     ADD COLUMN inference_interval_minutes INT NOT NULL DEFAULT 60
         CHECK (inference_interval_minutes BETWEEN 5 AND 10080);
 
--- 上次推完的时间。**到点对比就是拿这一次的结果跟库里现有的比**——
--- `materialize` 本来就在做这件事（算出来的对上现有的，多的插、少的作废），
--- 所以「对比」不是新机制，是把那次对比的结果记下来给人看
+-- The time of the last completed derivation run. **Checking whether it is due means
+-- comparing this run's result against what already exists in the knowledge base** —
+-- materialize already does exactly that (matching computed rows against existing ones,
+-- inserting new ones, invalidating stale ones). So this comparison is not a new
+-- mechanism; this column simply records the result of that comparison for a person to see.
 ALTER TABLE knowledge_bases ADD COLUMN last_inference_at TIMESTAMPTZ;

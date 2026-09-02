@@ -1,10 +1,13 @@
-// 顶栏告警（0005）：铃铛 + 未读角标 + 弹出面板。
+// Top-bar alerts (ADR 0005): a bell icon, an unread badge, and a popover panel.
 //
-// **弹窗不是页面**：告警是"顺手瞄一眼"的东西，不是一个要专门去逛的地方。
-// 做成页面会逼人离开手头的事，而离开的代价就是没人去看。
+// **This is a popover, not a page.** An alert is something to glance at
+// in passing, not a place to visit on purpose. A dedicated page would
+// force the user away from their current task, and that cost means fewer
+// people would ever check it.
 //
-// 一条告警 = 一次故障，写完不再变，没有"已解决"。
-// 「已读」逐人——一个人读过不代表别人也该从未读里消失。
+// One alert equals one failure. Once written, it does not change; there
+// is no "resolved" state. The "read" state is per user: one user reading
+// an alert does not clear it from another user's unread count.
 import { type Ref, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Bell, Search, X } from "lucide-react";
@@ -16,7 +19,7 @@ import { usePopoverFlip } from "../ui/popoverFlip";
 
 const PAGE = 8;
 
-/** 明细里给人看的那一行：对象名 — 报错原文 */
+/** The line shown for one detail row: the object name and the raw error text. */
 function line(d: AlertGroup["lines"][number]): string | null {
   const parts = [d.name ?? d.job, d.error].filter(Boolean);
   return parts.length ? parts.join(" — ") : null;
@@ -29,24 +32,27 @@ function AlertRow({
   g: AlertGroup;
   onRead: (g: AlertGroup) => void;
 }) {
-  // 没见过的 kind 也得显示得出来：新告警源上线时前端可能还没跟上，
-  // 而"有条告警但我不认识它"远好过"什么都不显示"
+  // An unrecognized kind must still display. When a new alert source
+  // ships, the frontend may not have a label for it yet, and "an alert
+  // exists but the label is unfamiliar" is much better than showing nothing.
   const worded = S.alerts.kinds[g.kind];
   const lines = g.lines.map(line).filter((l): l is string => !!l);
-  // count 数的是整组，lines 只带回前几条——差额是"还有 N 条"
+  // `count` covers the whole group, but `lines` returns only the first few. The difference is "N more".
   const rest = g.count - lines.length;
   return (
     <button
       type="button"
-      // **点击才算读过**，不是划过。鼠标经过一列告警不代表看过它们，
-      // 而已读一旦落下就再也不会自己回来。点一下把这一组整个标掉
+      // **Only a click marks an alert as read**, not a hover. Moving the
+      // mouse over a list of alerts does not mean the user saw them, and
+      // a read state does not undo itself. A click marks the whole group at once.
       onClick={() => {
         if (g.unread > 0) onRead(g);
       }}
       className="w-full text-left flex gap-2.5 px-3.5 py-3 border-b border-white/[0.06] last:border-b-0 hover:bg-white/[0.03] transition-colors"
     >
-      {/* 未读就是一个红点。整行描边或底色会让面板在告警多时变成一片红，
-          而红点只占它该占的那一点地方，读过就没了 */}
+      {/* An unread alert shows only a small red dot. A full-row border or
+          background would turn the panel entirely red when many alerts
+          exist. The dot occupies only the space it needs, and disappears once read. */}
       <span
         className={cn(
           "mt-[7px] h-1.5 w-1.5 rounded-full shrink-0",
@@ -85,7 +91,7 @@ function AlertRow({
             )}
           </ul>
         )}
-        {/* 时间取组里最新的那一次 */}
+        {/* This shows the timestamp of the most recent alert in the group. */}
         <p className="u-num mt-1.5 text-[10.5px] text-neutral-600">
           {new Date(g.latest_at).toLocaleString()}
         </p>
@@ -99,8 +105,8 @@ function Panel({ panelRef }: { panelRef: Ref<HTMLDivElement> }) {
   const [page, setPage] = useState(0);
   const qc = useQueryClient();
 
-  // 搜索后回第一页：停在第 4 页看一个只有 2 页的结果，
-  // 面板会显示空白，而人会读成"没有告警"
+  // A new search resets to the first page. Staying on page 4 while the
+  // result has only 2 pages would show a blank panel, and the user would read that as "no alerts".
   useEffect(() => {
     setPage(0);
   }, [q]);
@@ -108,7 +114,7 @@ function Panel({ panelRef }: { panelRef: Ref<HTMLDivElement> }) {
   const list = useQuery({
     queryKey: ["alerts", "list", q, page],
     queryFn: () => api.alerts({ q, limit: PAGE, offset: page * PAGE }),
-    // 翻页时留着上一页，免得面板高度塌一下再弹回来
+    // This keeps the previous page's data visible while paging, so the panel height does not collapse and then snap back.
     placeholderData: (prev) => prev,
   });
 
@@ -131,7 +137,7 @@ function Panel({ panelRef }: { panelRef: Ref<HTMLDivElement> }) {
   const total = list.data?.total ?? 0;
 
   return (
-    // top-0 而不是 top-9：面板要从铃铛**原位**长出来，右上角对齐
+    // This uses `top-0`, not `top-9`, because the panel must grow from the bell's **original position**, aligned at the top right.
     <div
       ref={panelRef}
       className="u-menu-glass absolute right-0 top-0 w-[420px] rounded-xl shadow-2xl z-50 overflow-hidden"
@@ -142,7 +148,8 @@ function Panel({ panelRef }: { panelRef: Ref<HTMLDivElement> }) {
         </span>
       </div>
 
-      {/* 跟文库的过滤框同一套：input-dark + 左侧图标 + 有值时右侧清除、Esc 清空 */}
+      {/* This matches the library's filter box: `input-dark`, a left
+          icon, a clear button on the right when a value exists, and Esc to clear. */}
       <div className="px-3.5 py-2.5 border-b border-white/[0.06]">
         <div className="relative">
           <Search
@@ -190,7 +197,7 @@ function Panel({ panelRef }: { panelRef: Ref<HTMLDivElement> }) {
         )}
       </div>
 
-      {/* 底栏：整张列表级的动作跟翻页放一起，离光标最远 */}
+      {/* Footer: list-wide actions sit next to the pager, farthest from the cursor. */}
       {groups.length > 0 && (
         <div className="flex items-center gap-3 px-3.5 py-2 border-t border-white/[0.06]">
           {groups.some((g) => g.unread > 0) && (
@@ -215,13 +222,14 @@ function Panel({ panelRef }: { panelRef: Ref<HTMLDivElement> }) {
 }
 
 export function AlertBell() {
-  // 跟用户菜单同一份原地变形：两个面板紧挨着，动画差一点点来回点两下就看得出来
+  // This shares the same in-place transform as the user menu. The two
+  // panels sit next to each other, so any small animation difference is visible on switching between them.
   const { open, setOpen, close, rootRef, anchorRef, panelRef } =
     usePopoverFlip<HTMLButtonElement, HTMLDivElement>();
   const unread = useQuery({
     queryKey: ["alerts", "unread"],
     queryFn: () => api.alertsUnread(),
-    // 推送是主路，这个只是断流时的兜底
+    // A push update is the primary path; this poll is only a fallback for when the stream disconnects.
     refetchInterval: 120_000,
   });
   const n = unread.data?.unread ?? 0;
@@ -234,8 +242,9 @@ export function AlertBell() {
         title={S.alerts.badgeLabel}
         aria-label={S.alerts.badgeLabel}
         aria-expanded={open}
-        // h-7 w-7 正方形：只装一个图标的按钮不该是长方形。
-        // 关闭按钮用同一组尺寸绝对定位在面板的 right-0 top-0，两者严丝合缝
+        // h-7 w-7 keeps this a square: a button holding only one icon
+        // should not be rectangular. The close button uses the same
+        // size, absolutely positioned at the panel's `right-0 top-0`, so the two align exactly.
         className={cn(
           "relative grid h-7 w-7 place-items-center rounded-lg transition-colors",
           open
@@ -244,8 +253,10 @@ export function AlertBell() {
         )}
       >
         <Bell size={15} />
-        {/* 角标也是个点，不是数字。"有事没看"是二元的，具体几条打开就知道；
-            数字还会随重试一路往上跳，跳到三位数就把铃铛撑变形了 */}
+        {/* The badge is a dot, not a number. "There is something unread"
+            is a yes-or-no state; the exact count shows once the panel
+            opens. A number would also climb with retries, and a
+            three-digit count would distort the bell's shape. */}
         {n > 0 && (
           <span className="absolute top-1 right-1 h-1.5 w-1.5 rounded-full bg-rose-500" />
         )}
@@ -253,14 +264,18 @@ export function AlertBell() {
       {open && (
         <>
           <Panel panelRef={panelRef} />
-          {/* 关闭按钮是面板的**兄弟**，不是它的孩子：放里面的话 `right-0 top-0`
-              相对的是面板的内边距盒，而 u-menu-glass 有一条 0.667px 的发丝边框
-              （DPR 1.5 上的一个物理像素），永远差那么一点。放在这里，定位祖先
-              就是裹着铃铛的这个 div，跟铃铛同一个盒子——重合是构造出来的。
+          {/* The close button is the panel's **sibling**, not its child.
+              Inside the panel, `right-0 top-0` would position relative
+              to the panel's padding box, and `u-menu-glass` has a
+              0.667px hairline border (one physical pixel at a device
+              pixel ratio of 1.5), which would always leave a small gap.
+              Placed here, the positioning ancestor is the div wrapping
+              the bell, the same box as the bell itself, so the alignment holds exactly.
 
-              光标点开面板之后正停在这个位置，所以这儿必须是"再点一下关掉"。
-              放"全部标为已读"等于把误触做成默认动作，而它一下清掉的是
-              所有库的所有告警 */}
+              The cursor rests at this exact spot right after opening the
+              panel, so this position must be "click again to close".
+              Placing "mark all as read" here would turn a stray click
+              into a default action, and it would clear every alert across every KB at once. */}
           <button
             onClick={close}
             title={S.alerts.close}

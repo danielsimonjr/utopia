@@ -1,18 +1,22 @@
-// 中文语言包。结构由 en.ts 定死（`Strings = typeof en`）——漏一条、多一条、
-// 函数签名对不上，都是编译错误。这是唯一靠得住的同步办法：512 条字符串靠人眼对不齐。
+// The Chinese language pack. The English pack (en.ts) fixes the shape: `Strings = typeof en`.
+// A missing key, an extra key, or a mismatched function signature is a compile error.
+// This check is the only reliable way to keep two packs of over 500 strings in sync —
+// a person cannot check that many strings by eye.
 //
-// 术语约定：知识库 / 工作区 / 本体 / 类 / 实体 / 关系 / 属性 / 事实 / 证据 /
-// 抽取 / 摄入 / 来源 / 文本块 / 图谱 / 审阅 / 冲突 / 合并 / 置信度 / 时态 /
-// 函数性 / 提示词 / 三元组。
+// Fixed terms: knowledge base / workspace / ontology / class / entity / relation /
+// attribute / fact / evidence / extraction / ingestion / source / chunk / graph /
+// review / conflict / merge / confidence / temporal / functional / prompt / triple.
 //
-// **不译的东西**：品牌字标（Utopia / Persona / Charter）、标识符（key、IRI）、
-// 产品名（DeepSeek、Ollama…）、URL。字标不译是因为它们是标记不是词。
+// **Do not translate:** brand wordmarks (Utopia / Persona / Charter), identifiers
+// (key, IRI), product names (DeepSeek, Ollama, and so on), and URLs. A wordmark is a
+// mark, not a word.
 import type { Strings } from "./en";
 
 export const zh: Strings = {
   app: {
     name: "Utopia",
-    /* 标语与出处都与 Utopia / Persona / Charter 同类：品牌的一部分，两种语言同值 */
+    /* Like Utopia / Persona / Charter, the tagline and its source are brand elements.
+       Both language packs use the same value. */
     tagline: "We rather wish than hope to see.",
     taglineSource: "— Thomas More, 1516",
     siteUrl: "https://utopia.bi",
@@ -57,7 +61,8 @@ export const zh: Strings = {
     close_at_required: "选一个这条事实结束的日期——新的那条没说自己何时开始。",
     empty_query: "输入点什么再检索。",
     no_data_sources: "这个知识库没有挂载任何数据库。",
-    // 授权是逐工作区的（0014）：源没授权给本库所属的工作区
+    // A grant is per workspace (see ADR 0014): this source is not granted to the
+    // workspace that owns this knowledge base.
     source_not_granted:
       "这个数据源没有授权给本工作区。请部署管理员在「系统设置 → 数据源」里授权。",
     memory_source_permanent: "「记忆」是知识库自带的来源，会一直在。",
@@ -572,9 +577,11 @@ export const zh: Strings = {
     noEvidence: "没有记录证据",
     noQuote: "（无引文）",
     proposedPredicate: (p: string) => `从原文读作「${p}」`,
-    /* 本体没认下这条关系：显示的词来自原文，不是词表里的关系 */
+    /* The ontology does not recognize this relation: the displayed wording comes
+       from the source text, not from the ontology's vocabulary. */
     inferredPredicate: "本体里没有这个关系，这是原文的说法",
-    /* 连原文说法都没留下的老数据（0052 之前）。不编一个「有关联」出来 */
+    /* Old data (from before migration 0052) that kept no source wording at all.
+       Do not invent a generic "related to" label for it. */
     unknownPredicate: "说不出是什么关系",
     sectionRef: (filename: string, seq: number) =>
       `${filename} · 第 ${seq} 段 →`,
@@ -1024,7 +1031,8 @@ export const zh: Strings = {
     unmount: "卸载",
     syncSchema: "刷新结构",
     schemaSynced: (n: number) => `结构已摄入（${n} 张表）`,
-    // 挂载成了、结构没成。**别说成失败**——源是真挂上的
+    // The source mounted, but its schema did not. **This is not called a failed
+    // mount** — the source is mounted.
     schemaFailed:
       "数据源已挂载，但库表结构没能摄入——问数看不见有哪些表。已报进告警中心；" +
       "检查连接串后点「刷新结构」重试。",
@@ -1131,8 +1139,9 @@ export const zh: Strings = {
     checking: "检查中…",
     checkNoAxioms: "本体没有声明任何公理，无从判起。先导一份带公理的本体。",
     checkFound: (n: number) => `新增 ${n} 处`,
-    /** 算出来了，但都是已经在队列里或已被裁决过的——说「3 处矛盾」而列表只有
-     *  一条会让人以为界面漏了东西 */
+    /** A run found matches, but every one was already in the queue or already
+     *  decided. Stating "3 contradictions found" next to a list with one row would
+     *  look like the interface dropped two of them. */
     checkNothingNew: "没有新的",
     checkClean: (n: number) => `查了 ${n} 条事实，没有矛盾`,
     mappings: "数据映射",

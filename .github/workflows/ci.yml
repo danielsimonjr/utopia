@@ -5,36 +5,33 @@ on:
     branches: [main]
   pull_request:
 
-# **显式只读。** 没有这一块时它继承仓库级默认，而那个默认要为
-# star-history 改成读写——CI 是每次推送、每个 PR 都跑的那个 workflow，
-# 不该因为别处的需要顺带拿到写权限。写在这里，仓库默认怎么变都与它无关
+# **This sets read-only access explicitly.** Without this block, the workflow inherits the
+# repository default. The default is read-write, because the star-history workflow needs it.
+# CI runs on every push and every pull request, so it must not inherit write access that
+# another workflow needs for a different reason. This setting stays fixed here no matter how
+# the repository default changes.
 permissions:
   contents: read
-
-env:
-  CARGO_TERM_COLOR: always
 
 jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
         with:
-          components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
-      - name: Format
-        run: cargo fmt --all --check
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+          bun-version: "1.4"
+      - name: Install
+        run: bun install --frozen-lockfile
       - name: Test
-        run: cargo test --workspace
-      - name: Build
-        run: cargo build --workspace
+        run: bun test
+      - name: Typecheck
+        run: bun run typecheck
 
-  # 迁移得真的在库上跑一遍。此前 CI 只有 fmt/clippy/test/build，于是两个 PR
-  # 各带一个 0025、各自通过，合进 main 之后服务直接起不来——sqlx 按版本号索引，
-  # 而**合并后的状态从来没有被任何一次 CI 跑过**。
+  # A migration must run against a real database. Before this job existed, CI ran only
+  # format, lint, test, and build. Two pull requests each added a migration numbered 0025.
+  # Both passed CI on their own. After the merge, the server would not start, because the
+  # migration runner indexes files by that number, and **no CI run ever tested the merged state.**
   migrations:
     runs-on: ubuntu-latest
     services:
@@ -50,52 +47,48 @@ jobs:
           --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
-      # 撞号在文件层面不是冲突，git 合得干干净净——只能显式查
-      - name: 版本号不得重复
+      # A duplicate migration number is not a merge conflict at the file level. Git merges
+      # two new files cleanly. This check is the only place that catches the duplicate.
+      - name: Check for duplicate migration numbers
         run: |
           dupes=$(ls migrations/ | cut -d_ -f1 | sort | uniq -d)
           if [ -n "$dupes" ]; then
-            echo "::error::迁移版本号重复：$dupes"
+            echo "::error::Duplicate migration numbers: $dupes"
             ls migrations/
             exit 1
           fi
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - name: 装 sqlx-cli
-        run: cargo install sqlx-cli --no-default-features --features rustls,postgres --locked
-      - name: 全新库上跑一遍
-        run: sqlx migrate run --database-url postgres://utopia:utopia@localhost:5432/utopia
-      # 第二遍必须也过：迁移改号后要能在已经跑过旧号的库上安全重放
-      - name: 再跑一遍
-        run: sqlx migrate run --database-url postgres://utopia:utopia@localhost:5432/utopia
-      # 连库的测试只有这个 job 跑得动——rust job 没有数据库，那些测试在那边
-      # 会跳过并显示绿色。不在这里跑一遍，等于写了测试却永远没执行过，
-      # 比没写更糟：它会让人以为 SQL 有覆盖
-      - name: 连库测试
-        run: cargo test -p utopia-store --test graph_changes
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4"
+      - name: Install
+        run: bun install --frozen-lockfile
+      - name: Run migrations on a fresh database
+        run: bun run scripts/migrate.ts
+        env:
+          UTOPIA_MIGRATION_URL: postgres://utopia:utopia@localhost:5432/utopia
+      # This second run must also pass. After a migration file changes its number, the
+      # runner must still replay safely against a database that already ran the old number.
+      - name: Run migrations a second time
+        run: bun run scripts/migrate.ts
+        env:
+          UTOPIA_MIGRATION_URL: postgres://utopia:utopia@localhost:5432/utopia
+      # Only this job can run the database-backed tests. The backend job has no database, so
+      # those tests skip there and show green. Skipping this step would leave those tests
+      # written but never executed, which is worse than not writing them: it lets a reader
+      # believe the SQL has coverage that it does not have.
+      - name: Test against the database
+        run: bun test
         env:
           UTOPIA_DATABASE_URL: postgres://utopia:utopia@localhost:5432/utopia
 
   web:
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@v4
-      # 版本来自 web/package.json 的 packageManager 字段——这里再写一次
-      # 就成了第二个事实来源，两边迟早分叉（镜像构建就是这么炸的）。
-      # package_json_file 必须显式给：上面的 working-directory 只管 run 步骤，
-      # 这个 action 默认在仓库根找 package.json，而根目录是 Cargo workspace。
-      - uses: pnpm/action-setup@v4
+      - uses: oven-sh/setup-bun@v2
         with:
-          package_json_file: web/package.json
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: pnpm
-          cache-dependency-path: web/pnpm-lock.yaml
+          bun-version: "1.4"
       - name: Install
-        run: pnpm install --frozen-lockfile
-      - name: Build (含类型检查)
-        run: pnpm build
+        run: bun install --frozen-lockfile
+      - name: Build (includes the type check)
+        run: bun run --filter utopia-web build
