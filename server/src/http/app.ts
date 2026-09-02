@@ -196,7 +196,9 @@ export function createApp(state: AppState, opts: CreateAppOptions): Hono {
   // Every audit write downstream reads the request's origin info from this
   // context; background jobs run outside any request and see none.
   app.use("*", async (c, next) => {
-    const server = c.env as { requestIP?: (req: Request) => { address: string } | null } | undefined;
+    const server = c.env as unknown as
+      | { requestIP?: (req: Request) => { address: string } | null }
+      | undefined;
     const forwarded = c.req.header("x-forwarded-for")?.split(",")[0]?.trim();
     const ip = forwarded ?? server?.requestIP?.(c.req.raw)?.address ?? null;
     const userAgent = c.req.header("user-agent") ?? null;
