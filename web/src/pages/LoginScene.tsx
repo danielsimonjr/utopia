@@ -1,31 +1,38 @@
-/* 登录页背景：巨构变换（Canvas 2D，零依赖）。
-   四种巨型形态——星球（球面）→ 环形都市（环面）→ 城市平原（起伏网格）→
-   波动巨碑（竖直巨墙）。结构持续缓慢自转（运动本身很便宜）；形态切换不做
-   逐点插值变形（那才是卡顿来源），而是整体淡出 → 换形态 → 淡入，浮现时
-   带一点由小到大的生长感。透视投影、结构大于视口（巨物应当出画）。
-   性能：形态几何只在切换时重算进 TypedArray；点按亮度分桶、每桶一次 fill；
-   DPR 封顶 1.5。纯中性白灰；prefers-reduced-motion 时静止单帧。 */
+/* Login page background: a megastructure transform, using Canvas 2D with
+   no dependencies. It cycles through four large-scale forms: a planet
+   (a sphere), a ring city (a torus), a city plain (an undulating grid),
+   and a wave monolith (a vertical wall). The structure keeps rotating
+   slowly, since rotation alone is cheap to render. A form change does
+   not interpolate point by point, which is the actual source of jank.
+   Instead, it fades out, swaps the form, and fades back in, with a
+   slight grow-from-small effect on reappearance. This uses a
+   perspective projection, and the structure is larger than the viewport,
+   because a megastructure should extend past the frame.
+   Performance: form geometry recomputes into a TypedArray only on a
+   form change. Points sort into brightness buckets, with one `fill`
+   call per bucket. The device pixel ratio caps at 1.5. Colors stay
+   neutral white and gray. With `prefers-reduced-motion`, this renders a single still frame. */
 import { useEffect, useRef } from "react";
 
-const U = 48; // 经向点数
-const V = 26; // 纬向点数
+const U = 48; // Point count along the longitude direction.
+const V = 26; // Point count along the latitude direction.
 const N = U * V;
-const HOLD_MS = 7000; // 完全可见的停留
-const FADE_MS = 1400; // 淡出 / 淡入各自时长
-const ROT_SPEED = 0.000024; // 弧度/毫秒（约 260s 一周，巨物应当迟缓）
-const BUCKETS = 12; // 点亮度分桶数
+const HOLD_MS = 7000; // How long the form stays fully visible.
+const FADE_MS = 1400; // Duration of each fade-out or fade-in.
+const ROT_SPEED = 0.000024; // Radians per millisecond (about 260s per full turn; a megastructure should move slowly).
+const BUCKETS = 12; // Number of brightness buckets for points.
 
 type Vec3 = [number, number, number];
 
-/** 形态族：每个函数把 (u,v)∈[0,1) 映射到 ~[-1,1]³ */
+/** The set of forms. Each function maps (u, v) in [0, 1) to a point in roughly [-1, 1]^3. */
 const FORMS: ((u: number, v: number) => Vec3)[] = [
-  // 星球：球面
+  // Planet: a sphere.
   (u, v) => {
     const lon = u * Math.PI * 2;
     const lat = (v - 0.5) * Math.PI * 0.92;
     return [Math.cos(lat) * Math.cos(lon), Math.sin(lat) * 0.95, Math.cos(lat) * Math.sin(lon)];
   },
-  // 环形都市：环面
+  // Ring city: a torus.
   (u, v) => {
     const a = u * Math.PI * 2;
     const b = v * Math.PI * 2;
@@ -37,14 +44,14 @@ const FORMS: ((u: number, v: number) => Vec3)[] = [
       (R + r * Math.cos(b)) * Math.sin(a),
     ];
   },
-  // 城市平原：起伏网格
+  // City plain: an undulating grid.
   (u, v) => {
     const x = (u - 0.5) * 2.5;
     const z = (v - 0.5) * 2.5;
     const y = Math.sin(x * 2.3) * 0.14 + Math.cos(z * 2.1 + x * 1.2) * 0.12 - 0.15;
     return [x, y, z];
   },
-  // 波动巨碑：竖直巨墙
+  // Wave monolith: a vertical wall.
   (u, v) => {
     const x = (u - 0.5) * 2.3;
     const y = (v - 0.5) * 1.5;
@@ -68,7 +75,7 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
 
     const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
-    // 点阵参数坐标
+    // Parameter coordinates for the point grid.
     const pu = new Float32Array(N);
     const pv = new Float32Array(N);
     for (let j = 0; j < V; j++)
@@ -77,7 +84,7 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
         pu[k] = i / U;
         pv[k] = j / (V - 1);
       }
-    // 网格邻接边，扁平存储
+    // Grid adjacency edges, stored as a flat array.
     const edgeIdx: number[] = [];
     for (let j = 0; j < V; j++)
       for (let i = 0; i < U; i++) {
@@ -86,14 +93,15 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
         if (j < V - 1) edgeIdx.push(a, a + U);
       }
     const edges = new Int32Array(edgeIdx);
-    // u 首尾回绕边：只在 u 方向闭合的形态（球面/环面）上绘制——
-    // 摊平形态（平原/巨碑）画它会横穿整个画面
+    // Wrap-around edges that close the u direction. These draw only for
+    // forms closed along u (the sphere and the torus). A flat form (the
+    // plain or the monolith) would draw a line straight across the whole scene.
     const wrapIdx: number[] = [];
     for (let j = 0; j < V; j++) wrapIdx.push(j * U + U - 1, j * U);
     const wrapEdges = new Int32Array(wrapIdx);
-    const U_CLOSED = [true, true, false, false]; // 与 FORMS 一一对应
+    const U_CLOSED = [true, true, false, false]; // Matches the order of FORMS.
 
-    // 当前形态几何：只在切换时重算，帧内零分配
+    // Geometry for the current form. This recomputes only on a form change, so a frame allocates nothing.
     const fx = new Float32Array(N), fy = new Float32Array(N), fz = new Float32Array(N);
     let cachedForm = -1;
     const fillForm = (idx: number) => {
@@ -109,38 +117,39 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
 
     const px = new Float32Array(N);
     const py = new Float32Array(N);
-    const pa = new Float32Array(N); // 深度→亮度 0..1
+    const pa = new Float32Array(N); // Depth mapped to a brightness value from 0 to 1.
 
-    // 亮度分桶：预生成样式串，帧内无字符串拼接
+    // Brightness buckets: pre-generated style strings, so a frame does no string concatenation.
     const bucketStyle: string[] = [];
     for (let b = 0; b < BUCKETS; b++)
       bucketStyle.push(`rgba(255,255,255,${(0.1 + (b / (BUCKETS - 1)) * 0.34).toFixed(3)})`);
     const buckets: number[][] = Array.from({ length: BUCKETS }, () => []);
 
-    // 原地闪烁：弱化为氛围层（主秀是下面的光脉冲）
+    // Twinkling points: a subtle ambient layer. The light pulses below are the main visual effect.
     const TWINKLES = 40;
     const twIdx = new Int32Array(TWINKLES);
     const twPhase = new Float32Array(TWINKLES);
     const twSpeed = new Float32Array(TWINKLES);
     for (let n = 0; n < TWINKLES; n++) {
-      twIdx[n] = (n * 1013 + 389) % N; // 确定性伪随机散布
-      twPhase[n] = ((n * 7919) % 628) / 100; // 0..2π
-      twSpeed[n] = 0.0008 + ((n * 271) % 100) / 100 * 0.0016; // 弧度/毫秒
+      twIdx[n] = (n * 1013 + 389) % N; // A deterministic, pseudo-random spread of points.
+      twPhase[n] = ((n * 7919) % 628) / 100; // A phase from 0 to 2*pi.
+      twSpeed[n] = 0.0008 + ((n * 271) % 100) / 100 * 0.0016; // Radians per millisecond.
     }
 
-    // 光脉冲：从一个顶点沿边亮向另一个顶点，拖渐隐尾迹（信号在巨构上传导）
+    // Light pulses: each pulse travels along an edge from one vertex to
+    // the next, leaving a fading trail, like a signal traveling across the structure.
     const PULSES = 12;
-    const TRAIL_MAX = 5; // 尾迹保留的节点数
-    const TRAIL_LEN = 3.2; // 尾迹可见长度（边数）
+    const TRAIL_MAX = 5; // Number of trailing nodes kept.
+    const TRAIL_LEN = 3.2; // Visible trail length, in edge count.
     type Pulse = {
-      trail: number[]; // 已过节点，旧→新
-      next: number; // 正在亮向的节点
-      t: number; // 当前边上的进度 0..1
-      speed: number; // 边/毫秒
+      trail: number[]; // Nodes already passed, oldest to newest.
+      next: number; // The node the pulse is traveling toward.
+      t: number; // Progress along the current edge, from 0 to 1.
+      speed: number; // Edges per millisecond.
       edgesLeft: number;
-      fade: number; // 出生/消亡包络
+      fade: number; // The fade-in/fade-out envelope.
       dying: boolean;
-      delay: number; // 重生倒计时（毫秒）
+      delay: number; // Countdown, in milliseconds, until respawn.
     };
     const nbuf: number[] = [];
     const neighborsOf = (k: number) => {
@@ -192,7 +201,7 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
       ctx.clearRect(0, 0, w, h);
 
-      // 推进光脉冲（与场景可见性无关，淡出期间也在走）
+      // Advance the light pulses. This runs regardless of scene visibility, including during a fade-out.
       for (const p of pulses) {
         if (p.delay > 0) {
           p.delay -= dt;
@@ -215,7 +224,8 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
             p.dying = true;
             break;
           }
-          // 选下一条边：偏好直行（信号感），不走回头路
+          // Pick the next edge: prefer a straight path, for a
+          // signal-like look, and avoid doubling back.
           const straight = cur + (cur - prev);
           neighborsOf(cur);
           if (nbuf.includes(straight) && Math.random() < 0.72) {
@@ -233,7 +243,7 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
         }
       }
 
-      // 时间轴：淡入 → 停留 → 淡出，边界处（不可见时）切换形态
+      // Timeline: fade in, hold, fade out. The form change happens at the boundary, while invisible.
       const cycle = HOLD_MS + FADE_MS * 2;
       const tt = now % (FORMS.length * cycle);
       const slot = Math.floor(tt / cycle);
@@ -254,7 +264,7 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
       const sinX = Math.sin(0.4);
       const cosX = Math.cos(0.4);
 
-      // 巨物尺度：大于视口；浮现时带一点生长感
+      // The megastructure's scale is larger than the viewport, with a slight grow effect on reappearance.
       const scale = Math.max(w, h) * 0.62 * (0.96 + 0.04 * vis);
       const cx = w * 0.5;
       const cy = h * 0.66;
@@ -273,13 +283,13 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
         const persp = 2.6 / (2.6 - z * 0.9);
         px[k] = cx + x * scale * persp;
         py[k] = cy - y * scale * persp;
-        pa[k] = Math.min(1, Math.max(0, (z + 1.15) / 2.1)); // 近处亮
+        pa[k] = Math.min(1, Math.max(0, (z + 1.15) / 2.1)); // A nearer point is brighter.
       }
 
-      // 整体可见度只动 globalAlpha 这一个旋钮
+      // Overall visibility changes through this one `globalAlpha` control.
       ctx.globalAlpha = vis;
 
-      // 边：极淡的白，一次 stroke
+      // Edges: a very faint white, drawn with a single stroke call.
       ctx.lineWidth = 1;
       ctx.strokeStyle = "rgba(255,255,255,0.045)";
       ctx.beginPath();
@@ -299,7 +309,8 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
       }
       ctx.stroke();
 
-      // 点：按亮度分桶，每桶一次 fill（矩形，1~2px 下与圆不可分辨）
+      // Points: grouped by brightness bucket, with one `fill` call per
+      // bucket. Each point renders as a rectangle, indistinguishable from a circle at 1-2px.
       for (let b = 0; b < BUCKETS; b++) buckets[b].length = 0;
       for (let k = 0; k < N; k++) {
         const b = Math.min(BUCKETS - 1, (pa[k] * BUCKETS) | 0);
@@ -318,7 +329,7 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
         ctx.fill();
       }
 
-      // 氛围闪烁：尖峰脉冲（sin⁶），弱化版
+      // Ambient twinkle: a sharp pulse using sin^6, kept subtle.
       ctx.fillStyle = "rgba(255,255,255,0.92)";
       for (let n = 0; n < TWINKLES; n++) {
         const s = Math.sin(now * twSpeed[n] + twPhase[n]);
@@ -333,7 +344,7 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
         ctx.fill();
       }
 
-      // 光脉冲：头部亮点 + 沿走过的边渐隐的尾迹
+      // Light pulses: a bright head point, plus a trail that fades along the edges it has traveled.
       ctx.strokeStyle = "#ffffff";
       ctx.fillStyle = "#ffffff";
       ctx.lineWidth = 1.2;
@@ -345,10 +356,12 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
         const hy = py[cur] + (py[p.next] - py[cur]) * p.t;
         const base = vis * p.fade * (0.35 + pa[cur] * 0.65);
 
-        // 尾迹：先画 cur→头部 的半段，再逐段回溯，按距头部的边数渐隐
+        // Trail: this draws the segment from the current node to the
+        // head first, then walks backward segment by segment, fading by
+        // the edge distance from the head.
         let x2 = hx;
         let y2 = hy;
-        let dist = 0; // 段中点距头部的边数
+        let dist = 0; // Edge distance from the segment midpoint to the head.
         for (let s = tail.length - 1; s >= 0; s--) {
           const k = tail[s];
           const segLen = s === tail.length - 1 ? p.t : 1;
@@ -364,7 +377,7 @@ export function LoginScene({ leaving }: { leaving?: boolean }) {
           dist += segLen;
         }
 
-        // 头部：光晕 + 亮核
+        // Head: a soft glow, plus a bright core.
         ctx.globalAlpha = base * 0.16;
         ctx.beginPath();
         ctx.arc(hx, hy, 3.8, 0, Math.PI * 2);
