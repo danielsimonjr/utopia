@@ -2,14 +2,14 @@
 
 [中文](CONTRIBUTING.zh-CN.md)
 
-Welcome. This file covers what is specific to this repository; general open-source etiquette is assumed.
+Welcome. This file covers what is specific to this repository. It assumes you already know general open-source etiquette.
 
 ## Branches and how changes land
 
 | Branch | What it is |
 |---|---|
-| `main` | Stable, matches the released version. Only maintainers merge into it, from `dev` |
-| `dev` | Integration branch. Every contribution lands here first |
+| `main` | Stable. Matches the released version. Only maintainers merge into it, from `dev`. |
+| `dev` | The integration branch. Every contribution lands here first. |
 
 Your path as a contributor:
 
@@ -20,81 +20,81 @@ git switch -c fix/some-thing        # branch off dev, not main
 git push -u origin fix/some-thing
 ```
 
-Then open a PR with **base `dev`, not `main`**. A maintainer merges once CI and review pass.
+Open a pull request with **base `dev`, not `main`**. A maintainer merges it once CI and review pass.
 
-Merging `dev → main` is done by maintainers on their own schedule; contributors don't need to think about it. Two rules keep the two branches from drifting apart, and both are for maintainers:
+Maintainers merge `dev` into `main` on their own schedule. Contributors do not need to think about this. Two rules keep the branches from drifting apart. Both apply to maintainers only:
 
-- **Back-merge `main` into `dev` right after a release.** The `dev → main` merge commit lives only on `main`, so without this `main` reads as ahead even though the trees are identical, and the gap grows by one every release.
-- **Urgent fixes go through `dev` too.** A PR opened straight against `main` is the one thing that makes the two branches genuinely diverge, and then someone has to reconcile them by hand.
+- **Back-merge `main` into `dev` right after a release.** The `dev → main` merge commit lives only on `main`. Without this back-merge, `main` looks ahead of `dev` even though the trees match, and the gap grows with every release.
+- **Send urgent fixes through `dev` too.** A pull request opened straight against `main` is the one thing that makes the two branches genuinely diverge. Someone then has to reconcile them by hand.
 
-Both branches are protected: pull request required, CI (`backend` and `web`) must pass, no force pushes, no deletions, and admins are held to the same rules.
+Both branches are protected. A pull request is required. CI (the `backend` and `web` jobs) must pass. Force pushes and branch deletion are blocked. Admins follow the same rules.
 
-## Issue first, or straight to a PR
+## Open an issue first, or go straight to a pull request
 
 | Change | What to do |
 |---|---|
-| Bug fixes, docs, i18n strings, tests | Open a PR directly |
+| Bug fixes, docs, i18n strings, tests | Open a pull request directly |
 | New features, dependency changes | Open an [issue](https://github.com/deeplethe/utopia/issues) first and describe the use case |
-| Data model, ontology contract, public API | Discuss in an issue, then land an [ADR](docs/decisions/) before writing code |
+| Data model, ontology contract, public API | Discuss it in an issue, then write an [ADR](docs/decisions/) before you write code |
 
-`docs/decisions/` is where this project's reasoning lives. An ADR records **why this and not that**, including the approaches that were tried and failed. For a change of any size, that document outlives the code.
+`docs/decisions/` holds this project's reasoning. An ADR (architecture decision record) states **why we chose this and not that**, including approaches we tried and rejected. For a change of any size, this document outlives the code.
 
 ## Local setup
 
-Requires Docker, Rust 1.85+, Node 20+, pnpm.
+Requirements: Docker, Bun 1.1+.
 
 ```bash
-docker compose up -d db                 # Postgres with pgvector
-cargo run -p utopia-server              # runs migrations, :1516
-cd web && pnpm install && pnpm dev      # :5173, proxies /api to the backend
+docker compose up -d db                       # Postgres with pgvector
+cd server && bun run src/index.ts             # runs migrations, listens on :1516
+cd web && bun install && bun run dev          # listens on :5173, proxies /api to the backend
 ```
 
 ## Before you push
 
-CI runs exactly this. Green locally means green in CI:
+CI runs exactly these checks. If they pass locally, they pass in CI:
 
 ```bash
-cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cd web && pnpm install --frozen-lockfile && pnpm build   # build type-checks
+bun test
+bun run typecheck
+cd web && bun install && bun run build   # build also runs the type checker
 ```
 
-### Database-backed tests **skip** without the env var
+### A database-backed test skips without the right environment variable
 
-This is the easiest thing to get wrong here. A green `cargo test --workspace` does not mean everything ran. A number of tests begin like this:
+This is the easiest mistake to make here. A green test run does not mean every test ran. Some tests start like this:
 
-```rust
-let Ok(url) = std::env::var("UTOPIA_DATABASE_URL") else {
-    eprintln!("skipping: UTOPIA_DATABASE_URL not set");
-    return Ok(());
-};
+```typescript
+const url = process.env.UTOPIA_DATABASE_URL;
+if (!url) {
+  console.warn("skipping: UTOPIA_DATABASE_URL not set");
+  return;
+}
 ```
 
-They guard what the compiler cannot see: table aliases inside SQL strings, how `NULL` behaves in a comparison, rows an `INNER JOIN` silently drops, whether a recursive CTE expands the same ancestor twice under diamond inheritance. `cargo check` and clippy say nothing about any of it.
+These tests check what a type checker cannot see: a table alias inside a SQL string, how `NULL` behaves in a comparison, a row an `INNER JOIN` silently drops, or whether a recursive query visits the same ancestor twice under diamond inheritance. Type checking and linting say nothing about any of this.
 
-If you touched SQL under `crates/utopia-store/`, set it and run again:
+If you changed SQL under `server/src/store/`, set the variable and run the tests again:
 
 ```bash
 export UTOPIA_DATABASE_URL=postgres://utopia:utopia@localhost:5432/utopia
-cargo test --workspace
+bun test
 ```
 
 ## Things review will send back
 
-**Don't collide migration numbers.** `migrations/` rolls forward by number. Check the latest number on `main` before opening a PR — two branches each writing an `0011_` has happened, and after the merge neither one runs.
+**Do not collide on migration numbers.** Files under `migrations/` apply in numeric order. Check the latest number on `main` before you open a pull request. Two branches have each added an `0011_` file before, and after the merge, neither one ran.
 
-**UI strings go in i18n.** Add to both `web/src/i18n/en.ts` and `zh.ts`; no hard-coded strings in components.
+**Put UI strings in i18n.** Add each string to both `web/src/i18n/en.ts` and `zh.ts`. Do not hard-code strings inside components.
 
-**Comments explain why.** This repository comments densely and deliberately records the traps it fell into ("the first version used OR, and the Elon Musk article then produced a snapshot every 6KB"). Follow that. A comment restating what the code does will be asked to go.
+**Write comments that explain why.** This repository comments densely and records the traps it fell into on purpose (for example: "the first version used OR, and one large document then produced a snapshot every 6KB"). Follow this pattern. A comment that only restates what the code does will come back in review.
 
-**Commit messages: one English sentence, stating the motivation.** No long body. Skim `git log` for the register.
+**Write one commit message per commit, in English, stating the motivation.** Keep it to one sentence, with no long body. Skim `git log` to see the style we use.
 
-**Every workflow declares its own `permissions:`.** The repository default is now read-and-write, because one workflow commits a generated chart. A workflow without a `permissions:` block inherits that default, so leaving it out silently hands write access to something that only needed to read. Declare the minimum the job actually needs — `contents: read` for anything that just builds or tests.
+**Give every workflow its own `permissions:` block.** The repository default is read-and-write, because one workflow commits a generated chart. A workflow with no `permissions:` block inherits that default and silently gets write access it does not need. Declare only what the job actually needs. Use `contents: read` for a job that only builds or tests.
 
 ## DCO: sign off every commit
 
-We use the [DCO](https://developercertificate.org/), not a CLA. You keep the copyright on your code; you are certifying that you have the right to submit it under Apache-2.0.
+We use the [DCO](https://developercertificate.org/), not a CLA. You keep the copyright on your code. You certify that you have the right to submit it under Apache-2.0.
 
 Commit with `-s` and git adds the line for you:
 
@@ -102,16 +102,16 @@ Commit with `-s` and git adds the line for you:
 git commit -s -m "Fix the thing"
 ```
 
-which appends:
+This appends:
 
 ```
 Signed-off-by: Your Name <your@email>
 ```
 
-Forgot? `git commit --amend -s` for the last commit, or `git rebase --signoff HEAD~3` for several (adjust the count), then `git push -f`.
+Forgot to sign off? Run `git commit --amend -s` for the last commit, or `git rebase --signoff HEAD~3` for several commits (adjust the count). Then run `git push -f`.
 
 Use a real name and a reachable email address.
 
 ## License
 
-By contributing you agree that your work is released under [Apache-2.0](LICENSE).
+By contributing, you agree that your work is released under [Apache-2.0](LICENSE).
