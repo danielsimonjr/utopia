@@ -32,6 +32,19 @@ export function connect(databaseUrl: string, maxConnections?: number): Sql {
     idle_timeout: 20,
     connect_timeout: 10,
     onnotice: () => {},
+    // `postgres` returns BIGINT (OID 20) as a string by default, to avoid
+    // silent precision loss above 2^53. Every BIGINT column in this schema
+    // (job ids, byte counts, chunk counts) stays well under that limit, and
+    // the Rust build serializes its i64 columns as plain JSON numbers — so
+    // parse BIGINT as a JS number here to match that wire shape.
+    types: {
+      bigint: {
+        to: 20,
+        from: [20],
+        serialize: (x: number) => String(x),
+        parse: (x: string) => Number(x),
+      },
+    },
   });
   log.info("database pool ready", { max_connections: max });
   return sql;
